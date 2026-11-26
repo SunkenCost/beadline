@@ -97,6 +97,7 @@ describe("dag-layout, modules, and prompt-builder", () => {
       repoName: "beadline",
       repoPath: "Y:\\GitHub\\beadline",
       hasBeads: true,
+      storageBackend: "native-jsonl",
       prefix: "bl",
       githubRepo: "org/repo",
       modulePrefix: "mod:",

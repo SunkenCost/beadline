@@ -57,6 +57,7 @@ function makeSnapshot(): WorkspaceSnapshot {
     repoName: "beadline",
     repoPath: "Y:\\GitHub\\beadline",
     hasBeads: true,
+    storageBackend: "native-jsonl",
     prefix: "bl",
     githubRepo: null,
     modulePrefix: "mod:",

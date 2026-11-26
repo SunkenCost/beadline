@@ -9,6 +9,7 @@ import type {
   CreateIssueResponse,
   CrossProjectActiveItem,
   GithubSyncResponse,
+  ManagedBdStatus,
   ModuleAliasConfig,
   PlatformInfo,
   UpdateIssueRequest,
@@ -89,8 +90,16 @@ export async function ipcUpdateWorkspaceConfig(params: {
   return invoke<WorkspaceListResponse>("update_workspace_config", params);
 }
 
-export async function ipcInitBeads(path: string, prefix?: string): Promise<WorkspaceSnapshot> {
-  return invoke<WorkspaceSnapshot>("init_beads", { path, prefix: prefix ?? null });
+export async function ipcInitBeads(
+  path: string,
+  prefix?: string,
+  mode?: "native" | "dolt",
+): Promise<WorkspaceSnapshot> {
+  return invoke<WorkspaceSnapshot>("init_beads", {
+    path,
+    prefix: prefix ?? null,
+    mode: mode ?? "native",
+  });
 }
 
 export async function ipcGetSnapshot(
@@ -199,6 +208,17 @@ export async function ipcRevealPath(path: string): Promise<void> {
 export async function ipcDetectBdPath(): Promise<string | null> {
   if (!isTauriRuntime()) return null;
   return invoke<string | null>("detect_bd_path");
+}
+
+export async function ipcGetBdStatus(): Promise<ManagedBdStatus> {
+  if (!isTauriRuntime()) {
+    return { installed: false, path: null, source: null, version: null };
+  }
+  return invoke<ManagedBdStatus>("get_bd_status");
+}
+
+export async function ipcInstallManagedBd(): Promise<ManagedBdStatus> {
+  return invoke<ManagedBdStatus>("install_managed_bd");
 }
 
 export async function ipcPickFolder(title: string): Promise<string | null> {

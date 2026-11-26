@@ -1,8 +1,10 @@
 use crate::engine::git_meta::read_beads_config_values;
+use crate::engine::native_store::detect_storage_backend;
 use crate::engine::smart_meta::extract_smart_meta;
 use crate::error::{AppError, AppResult};
 use crate::models::issue::{
-    BoardLane, BoardStats, DagEdge, IssueDto, ModuleCount, WorkspaceSnapshot, WorktreeRef,
+    BoardLane, BoardStats, DagEdge, IssueDto, ModuleCount, StorageBackend, WorkspaceSnapshot,
+    WorktreeRef,
 };
 use serde::Deserialize;
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -55,6 +57,8 @@ struct RawIssue {
     labels: Vec<String>,
     #[serde(default)]
     dependencies: Vec<RawDep>,
+    #[serde(default)]
+    comments: Vec<serde_json::Value>,
     #[serde(default)]
     comment_count: usize,
 }
@@ -238,6 +242,7 @@ pub struct RawIssueRecord(RawIssue);
 pub fn build_snapshot_from_records(
     repo_name: String,
     repo_path: String,
+    storage_backend: StorageBackend,
     prefix: Option<String>,
     github_repo: Option<String>,
     module_prefix: &str,
@@ -393,7 +398,7 @@ pub fn build_snapshot_from_records(
             blocked_by,
             open_blocked_by,
             blocks,
-            comment_count: r.comment_count,
+            comment_count: r.comment_count.max(r.comments.len()),
             smart,
         });
     }
@@ -422,6 +427,7 @@ pub fn build_snapshot_from_records(
         repo_name,
         repo_path,
         has_beads: true,
+        storage_backend,
         prefix,
         github_repo,
         module_prefix: effective_prefix.to_string(),
@@ -453,6 +459,7 @@ pub fn read_workspace_snapshot(
             repo_name,
             repo_path: repo_path_display,
             has_beads: false,
+            storage_backend: StorageBackend::NativeJsonl,
             prefix: None,
             github_repo,
             module_prefix: module_prefix.to_string(),
@@ -465,6 +472,7 @@ pub fn read_workspace_snapshot(
         });
     }
 
+    let storage_backend = detect_storage_backend(repo_root);
     let (prefix, cfg_gh) = read_beads_config_values(repo_root);
     let effective_gh = github_repo.or(cfg_gh);
     let fingerprint = compute_fingerprint(&beads_dir, module_prefix);
@@ -482,6 +490,7 @@ pub fn read_workspace_snapshot(
     Ok(build_snapshot_from_records(
         repo_name,
         repo_path_display,
+        storage_backend,
         prefix,
         effective_gh,
         module_prefix,
@@ -544,6 +553,7 @@ mod tests {
         let snap = build_snapshot_from_records(
             "beadline".into(),
             "Y:\\GitHub\\beadline".into(),
+            StorageBackend::NativeJsonl,
             Some("bl".into()),
             Some("example/beadline".into()),
             "mod:",

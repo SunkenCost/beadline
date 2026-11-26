@@ -59,7 +59,7 @@ interface WorkspaceState {
     moduleAliases: Record<string, ModuleAliasConfig>;
     pinned: boolean;
   }) => Promise<void>;
-  initBeads: (path: string, prefix?: string) => Promise<void>;
+  initBeads: (path: string, prefix?: string, mode?: "native" | "dolt") => Promise<void>;
   refreshSnapshot: (force?: boolean) => Promise<void>;
   applySnapshot: (snap: WorkspaceSnapshot) => boolean;
 
@@ -151,6 +151,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
           ? {
               ...w,
               hasBeads: snap.hasBeads,
+              storageBackend: snap.storageBackend,
               prefix: snap.prefix,
               issueCount: snap.stats.total,
               inProgressCount: snap.stats.inProgress,
@@ -250,10 +251,10 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     }
   },
 
-  initBeads: async (path, prefix) => {
+  initBeads: async (path, prefix, mode = "native") => {
     set({ syncStatus: "busy", lastError: null });
     try {
-      const snap = await ipcInitBeads(path, prefix);
+      const snap = await ipcInitBeads(path, prefix, mode);
       set({ activePath: snap.repoPath });
       get().applySnapshot(snap);
       await get().refreshWorkspaces();

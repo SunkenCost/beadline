@@ -26,6 +26,12 @@ pub enum AppError {
     #[error("config storage error: {0}")]
     ConfigIo(String),
 
+    #[error("invalid operation: {0}")]
+    InvalidOperation(String),
+
+    #[error("managed bd installation failed: {0}")]
+    InstallFailed(String),
+
     #[error("internal error: {0}")]
     Internal(String),
 }
@@ -49,6 +55,8 @@ impl AppError {
             Self::InvalidTheme(_) => "INVALID_THEME",
             Self::DisallowedScheme(_) => "DISALLOWED_SCHEME",
             Self::ConfigIo(_) => "CONFIG_IO",
+            Self::InvalidOperation(_) => "INVALID_OPERATION",
+            Self::InstallFailed(_) => "INSTALL_FAILED",
             Self::Internal(_) => "INTERNAL",
         }
     }

@@ -232,6 +232,8 @@ pub fn run() {
             commands::system::open_external_link,
             commands::system::reveal_path,
             commands::system::detect_bd_path,
+            commands::system::get_bd_status,
+            commands::system::install_managed_bd,
         ])
         .build(tauri::generate_context!())
         .expect("error while building Beadline")

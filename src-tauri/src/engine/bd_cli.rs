@@ -1,3 +1,4 @@
+use crate::engine::bd_installer::managed_bd_binary_path;
 use crate::error::{AppError, AppResult};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -21,13 +22,16 @@ pub fn configure_no_window(cmd: &mut Command) {
     }
 }
 
-pub fn resolve_bd_binary(explicit_path: Option<&str>) -> AppResult<PathBuf> {
+pub fn resolve_bd_with_source(
+    explicit_path: Option<&str>,
+    config_dir: Option<&Path>,
+) -> Option<(PathBuf, &'static str)> {
     if let Some(raw) = explicit_path {
         let trimmed = raw.trim();
         if !trimmed.is_empty() {
             let p = PathBuf::from(trimmed);
             if p.is_file() {
-                return Ok(p);
+                return Some((p, "custom"));
             }
         }
     }
@@ -37,13 +41,20 @@ pub fn resolve_bd_binary(explicit_path: Option<&str>) -> AppResult<PathBuf> {
         if !trimmed.is_empty() {
             let p = PathBuf::from(trimmed);
             if p.is_file() {
-                return Ok(p);
+                return Some((p, "env"));
             }
         }
     }
 
+    if let Some(dir) = config_dir {
+        let managed = managed_bd_binary_path(dir);
+        if managed.is_file() {
+            return Some((managed, "managed"));
+        }
+    }
+
     if let Some(found) = find_in_path(if cfg!(windows) { "bd.exe" } else { "bd" }) {
-        return Ok(found);
+        return Some((found, "system"));
     }
 
     // Platform fallback locations (WinGet, Scoop, Cargo, Homebrew)
@@ -60,7 +71,7 @@ pub fn resolve_bd_binary(explicit_path: Option<&str>) -> AppResult<PathBuf> {
                     if name.starts_with("GasTownHall.Beads_") {
                         let candidate = entry.path().join("bd.exe");
                         if candidate.is_file() {
-                            return Ok(candidate);
+                            return Some((candidate, "system"));
                         }
                     }
                 }
@@ -74,7 +85,7 @@ pub fn resolve_bd_binary(explicit_path: Option<&str>) -> AppResult<PathBuf> {
             ] {
                 let candidate = Path::new(&profile).join(rel);
                 if candidate.is_file() {
-                    return Ok(candidate);
+                    return Some((candidate, "system"));
                 }
             }
         }
@@ -85,20 +96,29 @@ pub fn resolve_bd_binary(explicit_path: Option<&str>) -> AppResult<PathBuf> {
         for abs in ["/opt/homebrew/bin/bd", "/usr/local/bin/bd"] {
             let candidate = PathBuf::from(abs);
             if candidate.is_file() {
-                return Ok(candidate);
+                return Some((candidate, "system"));
             }
         }
         if let Ok(home) = std::env::var("HOME") {
             for rel in [".local/bin/bd", ".cargo/bin/bd", "go/bin/bd"] {
                 let candidate = Path::new(&home).join(rel);
                 if candidate.is_file() {
-                    return Ok(candidate);
+                    return Some((candidate, "system"));
                 }
             }
         }
     }
 
-    Err(AppError::BdNotFound)
+    None
+}
+
+pub fn resolve_bd_binary(
+    explicit_path: Option<&str>,
+    config_dir: Option<&Path>,
+) -> AppResult<PathBuf> {
+    resolve_bd_with_source(explicit_path, config_dir)
+        .map(|(p, _)| p)
+        .ok_or(AppError::BdNotFound)
 }
 
 pub fn find_in_path(exe_name: &str) -> Option<PathBuf> {

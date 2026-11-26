@@ -102,11 +102,12 @@ pub async fn init_beads(
     state: State<'_, AppState>,
     path: String,
     prefix: Option<String>,
+    mode: Option<String>,
 ) -> AppResult<WorkspaceSnapshot> {
     let settings = state.settings.lock().await.clone();
     let snap = state
         .workspace_mgr
-        .init_beads(path.trim(), prefix, &settings)
+        .init_beads(path.trim(), prefix, mode.as_deref(), &settings)
         .await?;
     state.sync_workspace_watchers(&app, None);
     Ok(snap)

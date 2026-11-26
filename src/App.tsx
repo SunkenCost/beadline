@@ -257,11 +257,11 @@ export function App() {
     }
   };
 
-  const handleInitCurrent = async () => {
+  const handleInitCurrent = async (mode: "native" | "dolt" = "native") => {
     if (!activePath) return;
     setInitBusy(true);
     try {
-      await initBeads(activePath);
+      await initBeads(activePath, undefined, mode);
       pushToast(t.workspace.initSuccess, "ok");
     } catch (err) {
       pushToast(formatIpcError(err), "err");
@@ -643,14 +643,16 @@ export function App() {
                     </>
                   )}
 
-                  <Button
-                    variant="outline"
-                    disabled={syncingGh}
-                    onClick={() => void handleSyncGithub()}
-                  >
-                    <RefreshCw className={`h-3 w-3 ${syncingGh ? "animate-spin" : ""}`} />
-                    <span>{t.actions.syncGithub}</span>
-                  </Button>
+                  {snapshot?.storageBackend === "dolt-cli" && (
+                    <Button
+                      variant="outline"
+                      disabled={syncingGh}
+                      onClick={() => void handleSyncGithub()}
+                    >
+                      <RefreshCw className={`h-3 w-3 ${syncingGh ? "animate-spin" : ""}`} />
+                      <span>{t.actions.syncGithub}</span>
+                    </Button>
+                  )}
 
                   <Tooltip label={t.actions.refresh}>
                     <Button
@@ -724,13 +726,20 @@ export function App() {
                   <p className="mt-2 text-[12.5px] leading-relaxed text-[var(--fg-2)]">
                     {t.workspace.uninitDesc}
                   </p>
-                  <div className="mt-5 flex justify-center">
+                  <div className="mt-5 flex flex-wrap justify-center gap-2">
                     <Button
                       variant="primary"
                       disabled={initBusy}
-                      onClick={() => void handleInitCurrent()}
+                      onClick={() => void handleInitCurrent("native")}
                     >
                       {initBusy ? "..." : t.workspace.initCurrentBtn}
+                    </Button>
+                    <Button
+                      variant="outline"
+                      disabled={initBusy}
+                      onClick={() => void handleInitCurrent("dolt")}
+                    >
+                      {t.workspace.initDoltBtn}
                     </Button>
                   </div>
                 </div>

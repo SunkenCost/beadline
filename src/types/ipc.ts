@@ -10,6 +10,15 @@ export type DensityMode = "compact" | "comfortable";
 
 export type BoardLane = "in_progress" | "ready" | "blocked" | "closed";
 
+export type StorageBackend = "native-jsonl" | "dolt-cli";
+
+export interface ManagedBdStatus {
+  installed: boolean;
+  path: string | null;
+  source: string | null;
+  version: string | null;
+}
+
 export type IssueStatus = "open" | "in_progress" | "blocked" | "closed";
 
 export type IssueType =
@@ -144,6 +153,7 @@ export interface WorkspaceSnapshot {
   repoName: string;
   repoPath: string;
   hasBeads: boolean;
+  storageBackend: StorageBackend;
   prefix: string | null;
   githubRepo: string | null;
   modulePrefix: string;
@@ -171,6 +181,7 @@ export interface WorkspaceSummary {
   name: string;
   path: string;
   hasBeads: boolean;
+  storageBackend: StorageBackend;
   prefix: string | null;
   issueCount: number;
   inProgressCount: number;

@@ -16,12 +16,13 @@
 
 用 Beads（`bd`）让 AI Agent 在仓库里管理任务很顺手，但一旦多个项目并行、任务拆到几十条，光靠终端命令看全局进度就很累。
 
-**Beadline** 直接挂在你本地的 `.beads/` 目录上：**约 5 MB 可执行文件**、**Windows 下约 90 MB 内存**、文件变动实时同步，而且**绝不往你的业务仓库里写任何配置文件**。
+**Beadline** 内置原生 Rust Beads 存储引擎，**不装 `bd` 也能开箱即用** —— **约 5 MB 可执行文件**、**Windows 下约 90 MB 内存**、本地写入 `<2ms`，同时**双模无缝兼容**已有的 Dolt / `bd` 仓库，且绝不往业务仓库里写多余配置。
 
 ## 核心功能
 
 | | 你能直接用到什么 |
 |---|---|
+| **内置原生 Rust 引擎** | 零外部依赖直接运行（创建、编辑、关单、依赖防环、评论全在本地毫秒级完成，`.beads/issues.jsonl` 与官方 `bd init --from-jsonl` 完全兼容）；遇到 Dolt 仓库自动切双模同步，设置页也支持一键校验下载官方 `bd`。 |
 | **5 个高频视图** | **任务看板**（支持平铺 / 按主目标泳道分组）、**主目标**进度总览、可缩放拖拽的**依赖图谱（DAG）**、可多维筛选的**全部清单**，以及跨仓库的**全部进行中**视图。 |
 | **多项目 × 模块分组** | 侧边栏一键切换本地仓库；按标签前缀自动拆出模块（默认 `mod:*`，可按项目改成 `area:` / `pkg:`），支持自定义中文别名与色点。 |
 | **顺手的 AI 协作细节** | 一键**复制 Agent 上下文**（自动打包背景、验收标准、阻塞项与关联分支）；自动识别备注里的 Git 分支、Commit、GitHub `#编号`、本地 Worktree 目录及外部深链（`t3-thread://` / `vscode://` / `cursor://`）。 |
@@ -42,7 +43,7 @@
 
 ## 快速开始
 
-**环境要求：** Node.js 20+、`pnpm`、[Rust 工具链](https://rustup.rs/)、[`bd` CLI](https://github.com/steveyegge/beads)。
+**环境要求：** Node.js 20+、`pnpm`、[Rust 工具链](https://rustup.rs/)。（[`bd` CLI](https://github.com/steveyegge/beads) 为可选项 —— 仅在操作 Dolt 仓库或 GitHub 同步时需要，也可在应用设置内一键下载。）
 
 ```bash
 git clone https://github.com/SunkenCost/beadline.git
@@ -61,9 +62,9 @@ pnpm tauri build
 ```text
 本地 Git 仓库 (.beads/)
    │
-   ├── 读取 ──▶ Rust 原生文件监听 + 直读 `.beads/issues.jsonl`（毫秒级同步，零轮询）
-   ├── 写入 ──▶ 按仓库串行调用 `bd` CLI，前端 0ms 乐观更新，失败自动回滚
-   └── 配置 ──▶ 独立保存在系统用户目录（Windows 下位于 %APPDATA%\dev.beadline.desktop\）
+   ├── 原生模式 ──▶ 内置 Rust JSONL 引擎（<2ms 原子写入、零外部依赖、100% 兼容 bd 导入）
+   ├── Dolt 模式 ──▶ Rust 原生文件监听 + 直读 issues.jsonl + 串行 `bd` CLI 写队列（乐观更新 + 失败回滚）
+   └── 应用配置 ──▶ 独立保存在系统用户目录（Windows 下位于 %APPDATA%\dev.beadline.desktop\）
 ```
 
 - **不抢锁**：读取直接解析 `issues.jsonl` 并做内容指纹去重，多个 AI Agent 同时跑 `bd` 也不会冲突。

@@ -16,12 +16,13 @@
 
 Beads (`bd`) makes it easy for AI coding agents to track tasks inside a Git repository, but reading dozens of nested tasks in a terminal gets old fast.
 
-**Beadline** opens a native desktop window directly over your local `.beads/` folders — **~5 MB binary**, **~90 MB RAM on Windows**, instant file-watch sync, and **zero config files written into your repos**.
+**Beadline** works **out of the box with no external dependencies** thanks to a built-in Rust JSONL Beads engine — **~5 MB binary**, **~90 MB RAM on Windows**, instant `<2ms` local writes, and **100% dual-mode compatibility** with existing Dolt/`bd` repositories.
 
 ## Features
 
 | | What you get |
 |---|---|
+| **Zero-Dep Built-In Engine** | Works standalone with Beadline's built-in Rust JSONL engine (create, edit, close, dependencies with cycle detection, comments). Automatically syncs with Dolt-backed repos when `bd` is installed — or download official `bd` in one click inside Settings. |
 | **5 Focused Views** | **Kanban Board** (flat or grouped by epic), **Epics** progress, interactive **Dependency Graph (DAG)**, filterable **All Issues** table, and **All Active** across every connected repo. |
 | **Multi-Repo & Modules** | Switch between local repos instantly. Slice tasks by module labels (`mod:*`, or any custom prefix like `area:` / `pkg:`) with custom display names and colors. |
 | **Built for AI Workflows** | One-click **Copy Agent Prompt** (bundles context, acceptance criteria, blockers, and branches). Auto-detects Git branches, commit SHAs, GitHub `#issues`, local worktree folders, and deep links (`t3-thread://`, `vscode://`, `cursor://`). |
@@ -42,7 +43,7 @@ Beads (`bd`) makes it easy for AI coding agents to track tasks inside a Git repo
 
 ## Quick Start
 
-**Requirements:** Node.js 20+, `pnpm`, [Rust](https://rustup.rs/), and [`bd` CLI](https://github.com/steveyegge/beads).
+**Requirements:** Node.js 20+, `pnpm`, and [Rust](https://rustup.rs/). ([`bd` CLI](https://github.com/steveyegge/beads) is optional — only needed for Dolt repos or GitHub sync.)
 
 ```bash
 git clone https://github.com/SunkenCost/beadline.git
@@ -61,9 +62,9 @@ pnpm tauri build
 ```text
 Local Git Repos (.beads/)
    │
-   ├── Read  ──▶ Rust `notify` watcher + direct `.beads/issues.jsonl` parse (milliseconds, no polling)
-   ├── Write ──▶ Serialized `bd` CLI queue with optimistic UI updates & automatic rollback
-   └── State ──▶ Stored strictly in OS app config dir (e.g. %APPDATA%\dev.beadline.desktop\)
+   ├── Native Mode ──▶ Built-in Rust JSONL engine (<2ms atomic writes, zero external binary, bd-import compatible)
+   ├── Dolt Mode   ──▶ Rust `notify` watcher + direct `issues.jsonl` reads + serialized `bd` CLI write queue
+   └── App Config  ──▶ Stored strictly in OS config dir (e.g. %APPDATA%\dev.beadline.desktop\)
 ```
 
 - **No lock contention:** Reads parse `issues.jsonl` directly with content-based fingerprinting, so browsing never fights concurrent AI agents running `bd`.

@@ -169,6 +169,11 @@ export function WorkspaceSwitcher({ collapsed }: { collapsed: boolean }) {
                             {ws.prefix}
                           </span>
                         )}
+                        <span className="rounded-[3px] border border-[var(--border)] px-1 font-mono-tabular text-[9.5px] text-[var(--fg-3)]">
+                          {ws.storageBackend === "native-jsonl"
+                            ? t.workspace.engineNative
+                            : t.workspace.engineDolt}
+                        </span>
                       </div>
                       <div
                         className="truncate font-mono-tabular text-[10px] text-[var(--fg-3)]"

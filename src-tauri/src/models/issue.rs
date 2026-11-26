@@ -1,6 +1,22 @@
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum StorageBackend {
+    NativeJsonl,
+    DoltCli,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ManagedBdStatus {
+    pub installed: bool,
+    pub path: Option<String>,
+    pub source: Option<String>,
+    pub version: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum BoardLane {
     InProgress,
@@ -99,6 +115,7 @@ pub struct WorkspaceSnapshot {
     pub repo_name: String,
     pub repo_path: String,
     pub has_beads: bool,
+    pub storage_backend: StorageBackend,
     pub prefix: Option<String>,
     pub github_repo: Option<String>,
     pub module_prefix: String,

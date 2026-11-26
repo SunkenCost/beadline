@@ -5,10 +5,15 @@ use crate::engine::jsonl_reader::{
     compute_fingerprint, dolt_state_token, file_mtime_ms, latest_dolt_mtime_ms,
     read_workspace_snapshot,
 };
+use crate::engine::native_store::{
+    add_comment_native, close_issue_native, create_issue_native, detect_storage_backend,
+    init_native_workspace, mutate_dependency_native, read_inline_comments, reopen_issue_native,
+    update_issue_native,
+};
 use crate::error::{AppError, AppResult};
 use crate::models::issue::{
     BoardLane, CommentDto, CreateIssueRequest, CreateIssueResponse, GithubSyncResponse,
-    UpdateIssueRequest, WorkspaceSnapshot, WorktreeRef,
+    StorageBackend, UpdateIssueRequest, WorkspaceSnapshot, WorktreeRef,
 };
 use crate::models::settings::AppSettings;
 use crate::models::workspace::{
@@ -70,6 +75,13 @@ impl WorkspaceManager {
             export_records: Mutex::new(HashMap::new()),
             git_metadata: Mutex::new(HashMap::new()),
         }
+    }
+
+    fn resolve_bd(&self, settings: &AppSettings) -> AppResult<PathBuf> {
+        resolve_bd_binary(
+            settings.bd_path.as_deref(),
+            Some(self.config_store.config_dir()),
+        )
     }
 
     async fn lock_for(&self, norm_path: &str) -> Arc<Mutex<()>> {
@@ -228,6 +240,7 @@ impl WorkspaceManager {
                 name,
                 path: norm_path,
                 has_beads: false,
+                storage_backend: StorageBackend::NativeJsonl,
                 prefix: None,
                 issue_count: 0,
                 in_progress_count: 0,
@@ -238,6 +251,7 @@ impl WorkspaceManager {
             };
         }
 
+        let storage_backend = detect_storage_backend(root);
         let (prefix, _) = read_beads_config_values(root);
         let snap = read_workspace_snapshot(
             root,
@@ -256,6 +270,7 @@ impl WorkspaceManager {
             name,
             path: norm_path,
             has_beads: true,
+            storage_backend,
             prefix,
             issue_count,
             in_progress_count,
@@ -287,7 +302,7 @@ impl WorkspaceManager {
             .unwrap_or_else(|| "mod:".to_string());
 
         let beads_dir = root.join(".beads");
-        if beads_dir.is_dir() {
+        if beads_dir.is_dir() && detect_storage_backend(&root) == StorageBackend::DoltCli {
             let jsonl = beads_dir.join("issues.jsonl");
             if !jsonl.exists() || force_export {
                 // Blocking quick export when JSONL does not exist yet or user explicitly requested force refresh
@@ -416,6 +431,9 @@ impl WorkspaceManager {
         settings: &AppSettings,
     ) {
         let root = PathBuf::from(&normalized_path);
+        if detect_storage_backend(&root) != StorageBackend::DoltCli {
+            return;
+        }
         let beads_dir = root.join(".beads");
         let jsonl = beads_dir.join("issues.jsonl");
         if beads_dir.is_dir()
@@ -498,7 +516,7 @@ impl WorkspaceManager {
         norm: &str,
         settings: &AppSettings,
     ) -> AppResult<()> {
-        let Ok(bd_bin) = resolve_bd_binary(settings.bd_path.as_deref()) else {
+        let Ok(bd_bin) = self.resolve_bd(settings) else {
             return Ok(());
         };
         let lock = self.lock_for(norm).await;
@@ -549,6 +567,7 @@ impl WorkspaceManager {
         self: &Arc<Self>,
         workspace_path: &str,
         prefix: Option<String>,
+        mode: Option<&str>,
         settings: &AppSettings,
     ) -> AppResult<WorkspaceSnapshot> {
         let norm = normalize_display_path(workspace_path);
@@ -557,36 +576,42 @@ impl WorkspaceManager {
             return Err(AppError::WorkspaceNotFound(norm));
         }
 
-        let bd_bin = resolve_bd_binary(settings.bd_path.as_deref())?;
         let slug = prefix
             .map(|s| s.trim().to_lowercase())
             .filter(|s| !s.is_empty())
             .unwrap_or_else(|| derive_prefix(&root));
 
+        let use_dolt = matches!(mode, Some("dolt"));
+
         let lock = self.lock_for(&norm).await;
         {
             let _guard = lock.lock().await;
-            let init_args = vec![
-                "init".into(),
-                "--prefix".into(),
-                slug,
-                "--setup-exclude".into(),
-                "--skip-hooks".into(),
-                "--skip-agents".into(),
-                "--non-interactive".into(),
-            ];
-            run_bd(&bd_bin, &root, &init_args, None, 30).await?;
+            if use_dolt {
+                let bd_bin = self.resolve_bd(settings)?;
+                let init_args = vec![
+                    "init".into(),
+                    "--prefix".into(),
+                    slug,
+                    "--setup-exclude".into(),
+                    "--skip-hooks".into(),
+                    "--skip-agents".into(),
+                    "--non-interactive".into(),
+                ];
+                run_bd(&bd_bin, &root, &init_args, None, 30).await?;
 
-            let cfg_args = vec![
-                "config".into(),
-                "set".into(),
-                "export.auto".into(),
-                "true".into(),
-            ];
-            let _ = run_bd(&bd_bin, &root, &cfg_args, None, 15).await;
+                let cfg_args = vec![
+                    "config".into(),
+                    "set".into(),
+                    "export.auto".into(),
+                    "true".into(),
+                ];
+                let _ = run_bd(&bd_bin, &root, &cfg_args, None, 15).await;
 
-            self.export_jsonl_already_locked(&bd_bin, &root, &norm)
-                .await;
+                self.export_jsonl_already_locked(&bd_bin, &root, &norm)
+                    .await;
+            } else {
+                init_native_workspace(&root, &slug)?;
+            }
         }
 
         self.config_store
@@ -602,7 +627,18 @@ impl WorkspaceManager {
     ) -> AppResult<Vec<CommentDto>> {
         let norm = normalize_display_path(workspace_path);
         let root = PathBuf::from(&norm);
-        let bd_bin = resolve_bd_binary(settings.bd_path.as_deref())?;
+
+        if detect_storage_backend(&root) == StorageBackend::NativeJsonl {
+            return read_inline_comments(&root, issue_id);
+        }
+
+        if let Ok(inline) = read_inline_comments(&root, issue_id) {
+            if !inline.is_empty() {
+                return Ok(inline);
+            }
+        }
+
+        let bd_bin = self.resolve_bd(settings)?;
         // Serialize against bd export on the same workspace so embedded Dolt never
         // collides on its exclusive store lock.
         let lock = self.lock_for(&norm).await;
@@ -664,110 +700,119 @@ impl WorkspaceManager {
     ) -> AppResult<CreateIssueResponse> {
         let norm = normalize_display_path(&req.workspace_path);
         let root = PathBuf::from(&norm);
-        let bd_bin = resolve_bd_binary(settings.bd_path.as_deref())?;
+        let backend = detect_storage_backend(&root);
 
         let lock = self.lock_for(&norm).await;
         let created_id = {
             let _guard = lock.lock().await;
-            let mut args = vec![
-                "create".into(),
-                req.title.trim().to_string(),
-                "-t".into(),
-                req.issue_type.clone(),
-                "-p".into(),
-                req.priority.to_string(),
-                "--json".into(),
-            ];
-            if let Some(parent) = req
-                .parent_id
-                .as_deref()
-                .map(str::trim)
-                .filter(|s| !s.is_empty())
-            {
-                args.push("--parent".into());
-                args.push(parent.to_string());
-            }
-            if let Some(assignee) = req
-                .assignee
-                .as_deref()
-                .map(str::trim)
-                .filter(|s| !s.is_empty())
-            {
-                args.push("--assignee".into());
-                args.push(assignee.to_string());
-            }
-            let labels: Vec<String> = req
-                .labels
-                .iter()
-                .map(|l| l.trim().to_string())
-                .filter(|l| !l.is_empty())
-                .collect();
-            if !labels.is_empty() {
-                args.push("-l".into());
-                args.push(labels.join(","));
-            }
-            if let Some(desc) = req
-                .description
-                .as_deref()
-                .map(str::trim)
-                .filter(|s| !s.is_empty())
-            {
-                args.push("-d".into());
-                args.push(desc.to_string());
-            }
-            if let Some(acc) = req
-                .acceptance_criteria
-                .as_deref()
-                .map(str::trim)
-                .filter(|s| !s.is_empty())
-            {
-                args.push("--acceptance".into());
-                args.push(acc.to_string());
-            }
-            if let Some(notes) = req
-                .notes
-                .as_deref()
-                .map(str::trim)
-                .filter(|s| !s.is_empty())
-            {
-                args.push("--notes".into());
-                args.push(notes.to_string());
-            }
-
-            let out = run_bd(&bd_bin, &root, &args, None, 20).await?;
-            let parsed: serde_json::Value = serde_json::from_str(out.stdout.trim())
-                .map_err(|e| AppError::Internal(format!("failed to parse bd create json: {e}")))?;
-            let id = parsed
-                .get("id")
-                .and_then(|v| v.as_str())
-                .ok_or_else(|| AppError::Internal("bd create returned no id".into()))?
-                .to_string();
-
-            if req.status != "open" && !req.status.is_empty() {
-                let mut st_args = vec![
-                    "update".into(),
-                    id.clone(),
-                    "--status".into(),
-                    req.status.clone(),
+            if backend == StorageBackend::NativeJsonl {
+                let (cfg_prefix, _) = read_beads_config_values(&root);
+                let prefix = cfg_prefix.unwrap_or_else(|| derive_prefix(&root));
+                create_issue_native(&root, &req, &prefix)?
+            } else {
+                let bd_bin = self.resolve_bd(settings)?;
+                let mut args = vec![
+                    "create".into(),
+                    req.title.trim().to_string(),
+                    "-t".into(),
+                    req.issue_type.clone(),
+                    "-p".into(),
+                    req.priority.to_string(),
+                    "--json".into(),
                 ];
-                if settings.use_force_writes {
-                    st_args.push("--force".into());
+                if let Some(parent) = req
+                    .parent_id
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                {
+                    args.push("--parent".into());
+                    args.push(parent.to_string());
                 }
-                run_bd(&bd_bin, &root, &st_args, None, 20).await?;
-            }
-
-            for blocker in &req.blocked_by {
-                let b = blocker.trim();
-                if !b.is_empty() && b != id {
-                    let dep_args = vec!["dep".into(), "add".into(), id.clone(), b.to_string()];
-                    let _ = run_bd(&bd_bin, &root, &dep_args, None, 15).await;
+                if let Some(assignee) = req
+                    .assignee
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                {
+                    args.push("--assignee".into());
+                    args.push(assignee.to_string());
                 }
+                let labels: Vec<String> = req
+                    .labels
+                    .iter()
+                    .map(|l| l.trim().to_string())
+                    .filter(|l| !l.is_empty())
+                    .collect();
+                if !labels.is_empty() {
+                    args.push("-l".into());
+                    args.push(labels.join(","));
+                }
+                if let Some(desc) = req
+                    .description
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                {
+                    args.push("-d".into());
+                    args.push(desc.to_string());
+                }
+                if let Some(acc) = req
+                    .acceptance_criteria
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                {
+                    args.push("--acceptance".into());
+                    args.push(acc.to_string());
+                }
+                if let Some(notes) = req
+                    .notes
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                {
+                    args.push("--notes".into());
+                    args.push(notes.to_string());
+                }
+
+                let out = run_bd(&bd_bin, &root, &args, None, 20).await?;
+                let parsed: serde_json::Value =
+                    serde_json::from_str(out.stdout.trim()).map_err(|e| {
+                        AppError::Internal(format!("failed to parse bd create json: {e}"))
+                    })?;
+                let id = parsed
+                    .get("id")
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| AppError::Internal("bd create returned no id".into()))?
+                    .to_string();
+
+                if req.status != "open" && !req.status.is_empty() {
+                    let mut st_args = vec![
+                        "update".into(),
+                        id.clone(),
+                        "--status".into(),
+                        req.status.clone(),
+                    ];
+                    if settings.use_force_writes {
+                        st_args.push("--force".into());
+                    }
+                    run_bd(&bd_bin, &root, &st_args, None, 20).await?;
+                }
+
+                for blocker in &req.blocked_by {
+                    let b = blocker.trim();
+                    if !b.is_empty() && b != id {
+                        let dep_args = vec!["dep".into(), "add".into(), id.clone(), b.to_string()];
+                        let _ = run_bd(&bd_bin, &root, &dep_args, None, 15).await;
+                    }
+                }
+
+                self.export_jsonl_already_locked(&bd_bin, &root, &norm)
+                    .await;
+
+                id
             }
-
-            self.export_jsonl_already_locked(&bd_bin, &root, &norm)
-                .await;
-
-            id
         };
 
         let snapshot = self.get_snapshot(&norm, settings, false).await?;
@@ -784,51 +829,56 @@ impl WorkspaceManager {
     ) -> AppResult<WorkspaceSnapshot> {
         let norm = normalize_display_path(&req.workspace_path);
         let root = PathBuf::from(&norm);
-        let bd_bin = resolve_bd_binary(settings.bd_path.as_deref())?;
+        let backend = detect_storage_backend(&root);
 
         let lock = self.lock_for(&norm).await;
         {
             let _guard = lock.lock().await;
-            let mut args = vec!["update".into(), req.issue_id.clone()];
-            if settings.use_force_writes {
-                args.push("--force".into());
-            }
-            if let Some(title) = req.title {
-                args.push("--title".into());
-                args.push(title);
-            }
-            if let Some(status) = req.status {
-                args.push("--status".into());
-                args.push(status);
-            }
-            if let Some(priority) = req.priority {
-                args.push("-p".into());
-                args.push(priority.to_string());
-            }
-            if let Some(assignee) = req.assignee {
-                args.push("--assignee".into());
-                args.push(assignee);
-            }
-            if let Some(labels) = req.labels {
-                args.push("--set-labels".into());
-                args.push(labels.join(","));
-            }
-            if let Some(desc) = req.description {
-                args.push("-d".into());
-                args.push(desc);
-            }
-            if let Some(acc) = req.acceptance_criteria {
-                args.push("--acceptance".into());
-                args.push(acc);
-            }
-            if let Some(notes) = req.notes {
-                args.push("--notes".into());
-                args.push(notes);
-            }
+            if backend == StorageBackend::NativeJsonl {
+                update_issue_native(&root, &req)?;
+            } else {
+                let bd_bin = self.resolve_bd(settings)?;
+                let mut args = vec!["update".into(), req.issue_id.clone()];
+                if settings.use_force_writes {
+                    args.push("--force".into());
+                }
+                if let Some(title) = req.title {
+                    args.push("--title".into());
+                    args.push(title);
+                }
+                if let Some(status) = req.status {
+                    args.push("--status".into());
+                    args.push(status);
+                }
+                if let Some(priority) = req.priority {
+                    args.push("-p".into());
+                    args.push(priority.to_string());
+                }
+                if let Some(assignee) = req.assignee {
+                    args.push("--assignee".into());
+                    args.push(assignee);
+                }
+                if let Some(labels) = req.labels {
+                    args.push("--set-labels".into());
+                    args.push(labels.join(","));
+                }
+                if let Some(desc) = req.description {
+                    args.push("-d".into());
+                    args.push(desc);
+                }
+                if let Some(acc) = req.acceptance_criteria {
+                    args.push("--acceptance".into());
+                    args.push(acc);
+                }
+                if let Some(notes) = req.notes {
+                    args.push("--notes".into());
+                    args.push(notes);
+                }
 
-            run_bd(&bd_bin, &root, &args, None, 20).await?;
-            self.export_jsonl_already_locked(&bd_bin, &root, &norm)
-                .await;
+                run_bd(&bd_bin, &root, &args, None, 20).await?;
+                self.export_jsonl_already_locked(&bd_bin, &root, &norm)
+                    .await;
+            }
         }
 
         self.get_snapshot(&norm, settings, false).await
@@ -843,22 +893,27 @@ impl WorkspaceManager {
     ) -> AppResult<WorkspaceSnapshot> {
         let norm = normalize_display_path(workspace_path);
         let root = PathBuf::from(&norm);
-        let bd_bin = resolve_bd_binary(settings.bd_path.as_deref())?;
+        let backend = detect_storage_backend(&root);
 
         let lock = self.lock_for(&norm).await;
         {
             let _guard = lock.lock().await;
-            let mut args = vec!["close".into(), issue_id.to_string()];
-            if settings.use_force_writes {
-                args.push("--force".into());
+            if backend == StorageBackend::NativeJsonl {
+                close_issue_native(&root, issue_id, reason.as_deref())?;
+            } else {
+                let bd_bin = self.resolve_bd(settings)?;
+                let mut args = vec!["close".into(), issue_id.to_string()];
+                if settings.use_force_writes {
+                    args.push("--force".into());
+                }
+                if let Some(r) = reason.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+                    args.push("--reason".into());
+                    args.push(r.to_string());
+                }
+                run_bd(&bd_bin, &root, &args, None, 20).await?;
+                self.export_jsonl_already_locked(&bd_bin, &root, &norm)
+                    .await;
             }
-            if let Some(r) = reason.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
-                args.push("--reason".into());
-                args.push(r.to_string());
-            }
-            run_bd(&bd_bin, &root, &args, None, 20).await?;
-            self.export_jsonl_already_locked(&bd_bin, &root, &norm)
-                .await;
         }
 
         self.get_snapshot(&norm, settings, false).await
@@ -873,31 +928,36 @@ impl WorkspaceManager {
     ) -> AppResult<WorkspaceSnapshot> {
         let norm = normalize_display_path(workspace_path);
         let root = PathBuf::from(&norm);
-        let bd_bin = resolve_bd_binary(settings.bd_path.as_deref())?;
+        let backend = detect_storage_backend(&root);
 
         let lock = self.lock_for(&norm).await;
         {
             let _guard = lock.lock().await;
-            let mut args = vec!["reopen".into(), issue_id.to_string()];
-            if let Some(r) = reason.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
-                args.push("--reason".into());
-                args.push(r.to_string());
-            }
-            let res = run_bd(&bd_bin, &root, &args, None, 20).await;
-            if res.is_err() {
-                let mut fb = vec![
-                    "update".into(),
-                    issue_id.to_string(),
-                    "--status".into(),
-                    "open".into(),
-                ];
-                if settings.use_force_writes {
-                    fb.push("--force".into());
+            if backend == StorageBackend::NativeJsonl {
+                reopen_issue_native(&root, issue_id, reason.as_deref())?;
+            } else {
+                let bd_bin = self.resolve_bd(settings)?;
+                let mut args = vec!["reopen".into(), issue_id.to_string()];
+                if let Some(r) = reason.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+                    args.push("--reason".into());
+                    args.push(r.to_string());
                 }
-                run_bd(&bd_bin, &root, &fb, None, 20).await?;
+                let res = run_bd(&bd_bin, &root, &args, None, 20).await;
+                if res.is_err() {
+                    let mut fb = vec![
+                        "update".into(),
+                        issue_id.to_string(),
+                        "--status".into(),
+                        "open".into(),
+                    ];
+                    if settings.use_force_writes {
+                        fb.push("--force".into());
+                    }
+                    run_bd(&bd_bin, &root, &fb, None, 20).await?;
+                }
+                self.export_jsonl_already_locked(&bd_bin, &root, &norm)
+                    .await;
             }
-            self.export_jsonl_already_locked(&bd_bin, &root, &norm)
-                .await;
         }
 
         self.get_snapshot(&norm, settings, false).await
@@ -913,20 +973,25 @@ impl WorkspaceManager {
     ) -> AppResult<WorkspaceSnapshot> {
         let norm = normalize_display_path(workspace_path);
         let root = PathBuf::from(&norm);
-        let bd_bin = resolve_bd_binary(settings.bd_path.as_deref())?;
+        let backend = detect_storage_backend(&root);
 
         let lock = self.lock_for(&norm).await;
         {
             let _guard = lock.lock().await;
-            let args = vec![
-                "dep".into(),
-                if add { "add" } else { "remove" }.into(),
-                blocked_id.to_string(),
-                blocker_id.to_string(),
-            ];
-            run_bd(&bd_bin, &root, &args, None, 20).await?;
-            self.export_jsonl_already_locked(&bd_bin, &root, &norm)
-                .await;
+            if backend == StorageBackend::NativeJsonl {
+                mutate_dependency_native(&root, blocked_id, blocker_id, add)?;
+            } else {
+                let bd_bin = self.resolve_bd(settings)?;
+                let args = vec![
+                    "dep".into(),
+                    if add { "add" } else { "remove" }.into(),
+                    blocked_id.to_string(),
+                    blocker_id.to_string(),
+                ];
+                run_bd(&bd_bin, &root, &args, None, 20).await?;
+                self.export_jsonl_already_locked(&bd_bin, &root, &norm)
+                    .await;
+            }
         }
 
         self.get_snapshot(&norm, settings, false).await
@@ -941,20 +1006,25 @@ impl WorkspaceManager {
     ) -> AppResult<WorkspaceSnapshot> {
         let norm = normalize_display_path(workspace_path);
         let root = PathBuf::from(&norm);
-        let bd_bin = resolve_bd_binary(settings.bd_path.as_deref())?;
+        let backend = detect_storage_backend(&root);
 
         let lock = self.lock_for(&norm).await;
         {
             let _guard = lock.lock().await;
-            let args = vec![
-                "comments".into(),
-                "add".into(),
-                issue_id.to_string(),
-                text.trim().to_string(),
-            ];
-            run_bd(&bd_bin, &root, &args, None, 20).await?;
-            self.export_jsonl_already_locked(&bd_bin, &root, &norm)
-                .await;
+            if backend == StorageBackend::NativeJsonl {
+                add_comment_native(&root, issue_id, text)?;
+            } else {
+                let bd_bin = self.resolve_bd(settings)?;
+                let args = vec![
+                    "comments".into(),
+                    "add".into(),
+                    issue_id.to_string(),
+                    text.trim().to_string(),
+                ];
+                run_bd(&bd_bin, &root, &args, None, 20).await?;
+                self.export_jsonl_already_locked(&bd_bin, &root, &norm)
+                    .await;
+            }
         }
 
         self.get_snapshot(&norm, settings, false).await
@@ -968,7 +1038,12 @@ impl WorkspaceManager {
     ) -> AppResult<GithubSyncResponse> {
         let norm = normalize_display_path(workspace_path);
         let root = PathBuf::from(&norm);
-        let bd_bin = resolve_bd_binary(settings.bd_path.as_deref())?;
+        if detect_storage_backend(&root) != StorageBackend::DoltCli {
+            return Err(AppError::InvalidOperation(
+                "GitHub sync requires a Dolt-backed workspace with bd CLI installed".into(),
+            ));
+        }
+        let bd_bin = self.resolve_bd(settings)?;
 
         let mut env_map = HashMap::new();
         if let Some(token) = fetch_gh_auth_token().await {
@@ -1164,5 +1239,68 @@ mod tests {
             !mgr.should_background_export(&ws_str, &beads, &jsonl).await,
             "recent export failure must enforce backoff"
         );
+    }
+
+    #[tokio::test]
+    async fn native_workspace_manager_operates_completely_without_bd_binary() {
+        let (dir, mgr) = fixture();
+        let mgr = Arc::new(mgr);
+        let repo = dir.path().join("standalone-app");
+        std::fs::create_dir_all(&repo).expect("mkdir");
+        let repo_str = repo.to_string_lossy().to_string();
+
+        // Force invalid explicit bd_path to prove native mode never invokes bd
+        let settings = AppSettings {
+            bd_path: Some("/nonexistent/bd".into()),
+            ..Default::default()
+        };
+
+        let snap = mgr
+            .init_beads(&repo_str, Some("app".into()), Some("native"), &settings)
+            .await
+            .expect("native init");
+        assert!(snap.has_beads);
+        assert_eq!(snap.storage_backend, StorageBackend::NativeJsonl);
+
+        let created = mgr
+            .create_issue(
+                CreateIssueRequest {
+                    workspace_path: repo_str.clone(),
+                    title: "Standalone native issue".into(),
+                    issue_type: "task".into(),
+                    priority: 1,
+                    status: "open".into(),
+                    assignee: Some("agent".into()),
+                    parent_id: None,
+                    labels: vec!["mod:ui".into()],
+                    description: Some("Created with zero external bd".into()),
+                    acceptance_criteria: None,
+                    notes: None,
+                    blocked_by: vec![],
+                },
+                &settings,
+            )
+            .await
+            .expect("native create");
+        assert_eq!(created.snapshot.stats.total, 1);
+
+        let after_comment = mgr
+            .add_comment(&repo_str, &created.id, "Looks great", &settings)
+            .await
+            .expect("native comment");
+        assert_eq!(after_comment.issues[0].comment_count, 1);
+
+        let comments = mgr
+            .get_issue_comments(&repo_str, &created.id, &settings)
+            .await
+            .expect("read comments");
+        assert_eq!(comments.len(), 1);
+        assert_eq!(comments[0].text, "Looks great");
+
+        let closed = mgr
+            .close_issue(&repo_str, &created.id, Some("Done".into()), &settings)
+            .await
+            .expect("native close");
+        assert_eq!(closed.stats.closed, 1);
     }
 }

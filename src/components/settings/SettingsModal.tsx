@@ -1,8 +1,9 @@
 import {
-  AlertTriangle,
   Check,
   CheckCircle2,
   Copy,
+  Cpu,
+  Download,
   Monitor,
   Moon,
   RotateCcw,
@@ -15,13 +16,19 @@ import { Button } from "@/components/ui/Button";
 import { Dialog } from "@/components/ui/Dialog";
 import { Switch } from "@/components/ui/Switch";
 import { useT } from "@/i18n";
-import { ipcDetectBdPath } from "@/lib/ipc";
+import { formatIpcError, ipcGetBdStatus, ipcInstallManagedBd } from "@/lib/ipc";
 import { resolveModule } from "@/lib/modules";
 import { exportCurrentThemeJson, isSafeCssColor, parseThemeJson } from "@/lib/theme";
 import { useSettingsStore } from "@/stores/useSettingsStore";
 import { useUiStore } from "@/stores/useUiStore";
 import { useWorkspaceStore } from "@/stores/useWorkspaceStore";
-import type { AppearanceMode, DensityMode, ModuleAliasConfig, RadiusScale } from "@/types/ipc";
+import type {
+  AppearanceMode,
+  DensityMode,
+  ManagedBdStatus,
+  ModuleAliasConfig,
+  RadiusScale,
+} from "@/types/ipc";
 import { THEME_PRESETS } from "@/types/theme";
 
 const APPEARANCE_OPTIONS: readonly { id: AppearanceMode; icon: typeof Sun }[] = [
@@ -73,7 +80,8 @@ export function SettingsModal() {
 
   const [tab, setTab] = useState<SettingsTab>("appearance");
   const [bdPathDraft, setBdPathDraft] = useState(settings.bdPath ?? "");
-  const [detectedBd, setDetectedBd] = useState<string | null | undefined>(undefined);
+  const [bdStatus, setBdStatus] = useState<ManagedBdStatus | null>(null);
+  const [installingBd, setInstallingBd] = useState(false);
   const [schemesDraft, setSchemesDraft] = useState(settings.deepLinkSchemes.join(", "));
   const [modPrefixDraft, setModPrefixDraft] = useState(currentWs?.modulePrefix ?? "mod:");
   const [aliasesDraft, setAliasesDraft] = useState<Record<string, ModuleAliasConfig>>({});
@@ -90,9 +98,9 @@ export function SettingsModal() {
     setModPrefixDraft(ws?.modulePrefix ?? "mod:");
     setAliasesDraft({ ...(ws?.moduleAliases ?? {}) });
     setStatusMsg(null);
-    void ipcDetectBdPath()
-      .then((found) => setDetectedBd(found))
-      .catch(() => setDetectedBd(null));
+    void ipcGetBdStatus()
+      .then((st) => setBdStatus(st))
+      .catch(() => setBdStatus({ installed: false, path: null, source: null, version: null }));
   }, [open, activePath, settings.bdPath, settings.deepLinkSchemes]);
 
   const showNotice = (kind: "ok" | "err", text: string) => {
@@ -132,9 +140,22 @@ export function SettingsModal() {
         pinned: currentWs.pinned,
       });
     }
-    const found = await ipcDetectBdPath().catch(() => null);
-    setDetectedBd(found);
+    const refreshed = await ipcGetBdStatus().catch(() => null);
+    if (refreshed) setBdStatus(refreshed);
     showNotice("ok", t.settings.savedHint);
+  };
+
+  const handleInstallManagedBd = async () => {
+    setInstallingBd(true);
+    try {
+      const installed = await ipcInstallManagedBd();
+      setBdStatus(installed);
+      showNotice("ok", t.settings.installedBdToast);
+    } catch (err) {
+      showNotice("err", formatIpcError(err));
+    } finally {
+      setInstallingBd(false);
+    }
   };
 
   const handleExportTheme = async () => {
@@ -469,37 +490,72 @@ export function SettingsModal() {
             </div>
           </div>
 
-          {/* bd CLI Health Banner */}
-          <div className="flex items-center justify-between gap-3 rounded-[var(--radius-md)] border border-[var(--border)] bg-[var(--surface-subtle)] px-3 py-2.5">
-            <div className="min-w-0 flex-1">
-              <div className="flex items-center gap-1.5 text-[12px] font-medium text-[var(--fg)]">
-                {detectedBd ? (
-                  <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-[var(--success)]" />
-                ) : (
-                  <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-[var(--warning)]" />
-                )}
-                <span>
-                  {t.settings.bdStatusLabel} ·{" "}
-                  {detectedBd ? t.settings.bdDetected : t.settings.bdMissing}
+          {/* Dual-Mode Engine & bd CLI Health Banner */}
+          <div className="space-y-2.5 rounded-[var(--radius-md)] border border-[var(--border)] bg-[var(--surface-subtle)] px-3.5 py-3">
+            {snapshot?.hasBeads && (
+              <div className="flex items-center justify-between gap-2 border-b border-[var(--border-subtle)] pb-2">
+                <div className="flex items-center gap-1.5 text-[12px] font-medium text-[var(--fg)]">
+                  <Cpu className="h-3.5 w-3.5 shrink-0 text-[var(--accent)]" />
+                  <span>{t.settings.engineCurrentLabel}</span>
+                </div>
+                <span className="font-mono-tabular text-[11px] text-[var(--fg-2)]">
+                  {snapshot.storageBackend === "native-jsonl"
+                    ? t.settings.engineNativeDetail
+                    : t.settings.engineDoltDetail}
                 </span>
               </div>
-              <div className="mt-0.5 truncate font-mono-tabular text-[10.5px] text-[var(--fg-3)]">
-                {detectedBd ?? installCmd}
-              </div>
-            </div>
-            {!detectedBd && (
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={() => {
-                  void navigator.clipboard?.writeText(installCmd);
-                  showNotice("ok", t.settings.copiedInstallCmd);
-                }}
-              >
-                <Copy className="h-3 w-3" />
-                <span>{t.settings.copyInstallCmd}</span>
-              </Button>
             )}
+
+            <div className="flex items-center justify-between gap-3">
+              <div className="min-w-0 flex-1">
+                <div className="flex items-center gap-1.5 text-[12px] font-medium text-[var(--fg)]">
+                  <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-[var(--success)]" />
+                  <span>
+                    {t.settings.bdStatusLabel} ·{" "}
+                    {bdStatus?.installed ? t.settings.bdDetected : t.settings.bdMissing}
+                  </span>
+                  {bdStatus?.installed && bdStatus.source && (
+                    <span className="rounded-[var(--radius-xs)] border border-[var(--border)] bg-[var(--surface)] px-1.5 py-0.5 font-mono-tabular text-[10px] text-[var(--fg-3)]">
+                      {bdStatus.source === "managed"
+                        ? t.settings.bdSourceManaged
+                        : bdStatus.source === "custom"
+                          ? t.settings.bdSourceCustom
+                          : t.settings.bdSourceSystem}
+                    </span>
+                  )}
+                </div>
+                <div className="mt-0.5 truncate font-mono-tabular text-[10.5px] text-[var(--fg-3)]">
+                  {bdStatus?.installed
+                    ? `${bdStatus.version ? `${bdStatus.version} · ` : ""}${bdStatus.path ?? ""}`
+                    : t.settings.bdMissingHint}
+                </div>
+              </div>
+              {!bdStatus?.installed && (
+                <div className="flex shrink-0 items-center gap-1.5">
+                  <Button
+                    size="sm"
+                    variant="primary"
+                    disabled={installingBd}
+                    onClick={() => void handleInstallManagedBd()}
+                  >
+                    <Download className="h-3 w-3" />
+                    <span>
+                      {installingBd ? t.settings.installingBdBtn : t.settings.installBdBtn}
+                    </span>
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => {
+                      void navigator.clipboard?.writeText(installCmd);
+                      showNotice("ok", t.settings.copiedInstallCmd);
+                    }}
+                  >
+                    <Copy className="h-3 w-3" />
+                  </Button>
+                </div>
+              )}
+            </div>
           </div>
 
           {/* Force Writes */}

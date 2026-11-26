@@ -1,4 +1,4 @@
-use crate::models::issue::IssueDto;
+use crate::models::issue::{IssueDto, StorageBackend};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
@@ -51,6 +51,7 @@ pub struct WorkspaceSummary {
     pub name: String,
     pub path: String,
     pub has_beads: bool,
+    pub storage_backend: StorageBackend,
     pub prefix: Option<String>,
     pub issue_count: usize,
     pub in_progress_count: usize,
