@@ -34,7 +34,7 @@ export function formatIpcError(err: unknown): string {
 export const DEFAULT_SETTINGS: AppSettings = {
   language: "zh-CN",
   theme: {
-    preset: "warm-claude",
+    preset: "warm-clay",
     appearance: "system",
     accentOverride: null,
     radius: "default",

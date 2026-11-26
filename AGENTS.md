@@ -48,13 +48,13 @@ Before making changes, read [docs/design/architecture.md](docs/design/architectu
 
 ### 2. Visual & UX Guardrails (Anti-AI-Slop Law)
 
-Beadline's flagship aesthetic is **Warm Claude × Coss UI × Linear** (with switchable **Linear Slate** and **Pure Mono** presets + Theme JSON customization). Every UI contribution must obey:
+Beadline's flagship aesthetic is **Warm Clay × Coss UI × Linear** (with switchable **Linear Slate** and **Pure Mono** presets + Theme JSON customization). Every UI contribution must obey:
 
 1. **No Boxes Inside Boxes**: Kanban lanes sit directly on `--bg` separated by 1px subtle hairlines — never wrap lanes in bordered/rounded cards.
 2. **No Badge / Pill Soup on Cards**: Kanban cards use a crisp 3-line typographic hierarchy (Linear-style SVG priority signal + muted mono ID + optional `#N`; clean 2-line title; borderless inline module dot + plain text blocker/commit). Never decorate cards with 6–10 colored bordered pill rectangles, bright white `#N` badges, or thick colored left stripes.
 3. **Hover-Only Secondary Actions**: Quick actions like `✓ Complete` appear quietly on card hover (swapping cleanly with the top-right slot) instead of occupying a permanent footer bar.
 4. **Visual Hierarchy by State**: Closed-column cards use muted contrast so the eye naturally lands on `In Progress` and `Ready`.
-5. **Semantic Tokens Only**: Never hardcode hex colors or raw Tailwind grays in feature components. Always consume theme CSS custom properties (`--bg`, `--surface`, `--fg`, `--accent`, etc.) so all presets (`Warm Claude`, `Linear Slate`, `Pure Mono`), `light/dark/system` modes, and imported Theme JSONs work seamlessly.
+5. **Semantic Tokens Only**: Never hardcode hex colors or raw Tailwind grays in feature components. Always consume theme CSS custom properties (`--bg`, `--surface`, `--fg`, `--accent`, etc.) so all presets (`Warm Clay`, `Linear Slate`, `Pure Mono`), `light/dark/system` modes, and imported Theme JSONs work seamlessly.
 6. **Bilingual Parity (`zh-CN` & `en`)**: No hardcoded user-facing strings in components. Use idiomatic Chinese terminology (e.g., `主目标` / `就绪可派发` / `被阻塞` — **never** translationese like `史诗`).
 
 ### 3. Dogfooding Beads (`bd`) in This Repository

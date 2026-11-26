@@ -74,7 +74,7 @@
 All UI colors derive from semantic CSS tokens (`--bg`, `--sidebar`, `--surface`, `--surface-subtle`, `--surface-hover`, `--surface-active`, `--fg`, `--fg-2`, `--fg-3`, `--border`, `--border-strong`, `--border-subtle`, `--primary`, `--primary-fg`, `--accent`, `--accent-soft`, `--accent-border`, `--success`, `--warning`, `--danger`, `--info`, `--radius-scale`, `--density`).
 
 ### Built-In Presets (Each Supporting `light` / `dark` / `system`)
-1. **Warm Claude** *(default)* — Warm paper `#FAF9F6` / warm charcoal `#121211`, terracotta `#C96442` / `#D97757`.
+1. **Warm Clay** *(default)* — Warm paper `#FAF9F6` / warm charcoal `#121211`, terracotta `#C96442` / `#D97757`.
 2. **Linear Slate** — Crisp neutral slate `#FFFFFF` / `#0E1013`, indigo accent `#5E6AD2`.
 3. **Pure Mono** — Editorial monochrome `#FAFAFA` / `#0C0C0C`, high-contrast ink accent.
 

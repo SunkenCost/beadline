@@ -34,7 +34,7 @@ export interface ThemePresetMeta {
 }
 
 export const THEME_PRESETS: readonly ThemePresetMeta[] = [
-  { id: "warm-claude", swatchBg: "#121211", swatchAccent: "#D97757" },
+  { id: "warm-clay", swatchBg: "#121211", swatchAccent: "#D97757" },
   { id: "linear-slate", swatchBg: "#0E1013", swatchAccent: "#7A86E8" },
   { id: "pure-mono", swatchBg: "#0B0B0B", swatchAccent: "#E5E5E5" },
 ] as const;

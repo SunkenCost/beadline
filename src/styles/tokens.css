@@ -1,6 +1,6 @@
 /* ==========================================================================
    Beadline Semantic Theme Tokens
-   Presets: warm-claude (default) | linear-slate | pure-mono
+   Presets: warm-clay (default) | linear-slate | pure-mono
    Appearance: light | dark
    ========================================================================== */
 
@@ -47,9 +47,9 @@
   --lane-gap: 4px;
 }
 
-/* ---------- Preset 1: Warm Claude (Flagship Default) ---------- */
+/* ---------- Preset 1: Warm Clay (Flagship Default) ---------- */
 :root,
-:root[data-preset="warm-claude"][data-theme="light"] {
+:root[data-preset="warm-clay"][data-theme="light"] {
   --bg: #faf9f6;
   --sidebar: #f4f3ee;
   --surface: #ffffff;
@@ -85,7 +85,7 @@
   --shadow-lg: 0 16px 40px -12px rgba(0, 0, 0, 0.18), 0 2px 6px rgba(0, 0, 0, 0.05);
 }
 
-:root[data-preset="warm-claude"][data-theme="dark"] {
+:root[data-preset="warm-clay"][data-theme="dark"] {
   --bg: #121211;
   --sidebar: #151514;
   --surface: #1a1a18;

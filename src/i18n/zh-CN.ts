@@ -208,7 +208,7 @@ export const zhCN = {
   },
   theme: {
     presets: {
-      "warm-claude": "Warm Claude",
+      "warm-clay": "Warm Clay",
       "linear-slate": "Linear Slate",
       "pure-mono": "Pure Mono",
     },

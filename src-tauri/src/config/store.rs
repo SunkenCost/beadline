@@ -249,8 +249,13 @@ mod tests {
 
         let defaults = store.load_settings();
         assert_eq!(defaults.language, Locale::ZhCn);
-        assert_eq!(defaults.theme.preset, ThemePresetId::WarmClaude);
+        assert_eq!(defaults.theme.preset, ThemePresetId::WarmClay);
         assert!(defaults.use_force_writes);
+
+        // Legacy preset id "warm-claude" migrates seamlessly to WarmClay
+        let legacy: ThemePresetId =
+            serde_json::from_str("\"warm-claude\"").expect("legacy preset alias");
+        assert_eq!(legacy, ThemePresetId::WarmClay);
 
         let mut updated = defaults;
         updated.language = Locale::En;

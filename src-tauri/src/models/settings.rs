@@ -14,7 +14,8 @@ pub enum Locale {
 #[serde(rename_all = "kebab-case")]
 pub enum ThemePresetId {
     #[default]
-    WarmClaude,
+    #[serde(alias = "warm-claude")]
+    WarmClay,
     LinearSlate,
     PureMono,
 }
@@ -78,7 +79,7 @@ pub struct ThemeSettings {
 impl Default for ThemeSettings {
     fn default() -> Self {
         Self {
-            preset: ThemePresetId::WarmClaude,
+            preset: ThemePresetId::WarmClay,
             appearance: AppearanceMode::System,
             accent_override: None,
             radius: RadiusScale::Default,
