@@ -545,7 +545,7 @@ mod tests {
             "beadline".into(),
             "Y:\\GitHub\\beadline".into(),
             Some("bl".into()),
-            Some("maxgohome/beadline".into()),
+            Some("example/beadline".into()),
             "mod:",
             "fp1".into(),
             records,

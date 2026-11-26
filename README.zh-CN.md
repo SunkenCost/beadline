@@ -4,7 +4,7 @@
 
 [English](./README.md)
 
-Beadline 是一款开源、轻量、美观的跨平台（**Windows / macOS / Linux**）Beads 任务图桌面应用。基于 **Tauri v2 (Rust) + React 19 + Tailwind CSS v4 + Coss UI (`@base-ui/react`)** 构建，安装包约 10 MB、内存约 50 MB、秒开，且无需本地 Python 服务或端口监听。
+Beadline 是一款开源、轻量、美观的跨平台（**Windows / macOS / Linux**）Beads 任务图桌面应用。基于 **Tauri v2 (Rust) + React 19 + Tailwind CSS v4 + Coss UI (`@base-ui/react`)** 构建，可执行文件仅约 5 MB、Windows WebView2 下常驻内存约 90 MB，秒开且无需本地 Python 服务或端口监听。
 
 ## 核心特性
 
@@ -23,11 +23,25 @@ Beadline 是一款开源、轻量、美观的跨平台（**Windows / macOS / Lin
 - 完整架构与设计蓝图：[docs/design/architecture.md](./docs/design/architecture.md)
 - 前端 / Rust 后端工程约束：[`.trellis/spec/`](./.trellis/spec/)
 
+## 快速开始
+
+### 环境依赖
+- Node.js 20+ 与 `pnpm`
+- Rust 工具链（`rustup`）
+- [Beads CLI (`bd`)](https://github.com/steveyegge/beads)
+
+```bash
+pnpm install
+pnpm tauri dev          # 开发模式启动桌面端
+pnpm tauri build        # 构建 Release 客户端与安装包
+```
+
 ## 路线图
 
 - [x] 项目架构设计、工程约束与 Trellis / Beads 协同环境初始化
-- [ ] **Milestone 1**：Tauri v2 + React/Coss UI 骨架、Rust 混合事件引擎、无边框窗口、多项目/模块导航、主题与双语系统、4+1 核心视图
-- [ ] **Milestone 2**：`⌘K` 命令面板、Theme JSON 导入导出、一键复制 Agent Prompt、GitHub 同步、完整设置页与 Windows/macOS 安装包构建
+- [x] **Milestone 1**：Tauri v2 + React/Coss UI 无边框壳层、Rust 混合事件引擎、多项目/模块导航、主题与双语系统、4+1 核心视图
+- [x] **Milestone 2（核心）**：`⌘K / Ctrl+K` 命令面板、主题 JSON 导入导出、一键复制 Agent 上下文、GitHub 同步、按主目标泳道与背景卡片、WebView2 内存治理
+- [ ] **Milestone 2（发布）**：Windows NSIS/MSI 与 macOS DMG 安装包及 GitHub Actions 自动发版流水线
 
 ## 开源协议
 

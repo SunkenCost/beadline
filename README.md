@@ -4,7 +4,7 @@
 
 [简体中文](./README.zh-CN.md)
 
-Beadline is a fast, open-source, cross-platform (**Windows / macOS / Linux**) desktop GUI for Beads issue graphs. Built with **Tauri v2 (Rust)**, **React 19**, **Tailwind CSS v4**, and **Coss UI (`@base-ui/react`)**, it starts instantly, uses ~50 MB of RAM, and stays out of your way while AI agents work in parallel across your repositories.
+Beadline is a fast, open-source, cross-platform (**Windows / macOS / Linux**) desktop GUI for Beads issue graphs. Built with **Tauri v2 (Rust)**, **React 19**, **Tailwind CSS v4**, and **Coss UI (`@base-ui/react`)**, it starts instantly, stays lightweight (~5 MB binary, ~90 MB RAM on Windows WebView2), and stays out of your way while AI agents work in parallel across your repositories.
 
 ## Why Beadline?
 
@@ -30,11 +30,25 @@ Beadline is a fast, open-source, cross-platform (**Windows / macOS / Linux**) de
 
 See [docs/design/architecture.md](./docs/design/architecture.md) for the full design specification and [.trellis/spec/](./.trellis/spec/) for frontend and Rust backend engineering guidelines.
 
+## Quick Start
+
+### Prerequisites
+- Node.js 20+ & `pnpm`
+- Rust toolchain (`rustup`)
+- [Beads CLI (`bd`)](https://github.com/steveyegge/beads)
+
+```bash
+pnpm install
+pnpm tauri dev          # Run desktop app in dev mode
+pnpm tauri build        # Build native release binary & installer
+```
+
 ## Roadmap
 
 - [x] Architecture specification, engineering constraints, and Trellis + Beads workspace initialization
-- [ ] **Milestone 1**: Tauri v2 + React/Coss UI scaffold, Rust hybrid `notify` engine, frameless window, multi-project/module navigation, themes & i18n, and all 4+1 views
-- [ ] **Milestone 2**: `⌘K` command palette, Theme JSON import/export, Agent Prompt copy, GitHub sync, settings panel, and signed Windows/macOS release bundles
+- [x] **Milestone 1**: Tauri v2 + React/Coss UI frameless shell, Rust event-driven Beads engine, multi-workspace/module navigation, themes + bilingual i18n, 4+1 core views
+- [x] **Milestone 2 (Core)**: `⌘K / Ctrl+K` command palette, Theme JSON import/export, 1-click Copy Agent Prompt, GitHub sync, epic swimlanes & context cards, WebView2 memory optimization
+- [ ] **Milestone 2 (Release)**: Signed Windows NSIS/MSI & macOS DMG installers + GitHub Actions release workflow
 
 ## License
 

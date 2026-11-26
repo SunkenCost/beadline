@@ -151,7 +151,7 @@ mod tests {
             "Description text",
             "Branch: origin/release/v371p5-unified-rc | Commit: 7318baf9ae0d | Thread: [Review](t3-thread://v2/env/123) | bad: javascript://evil",
             "Merged (309afe3)",
-            Some("maxgohome/pbl-graph"),
+            Some("example/demo-repo"),
             &worktrees,
             &schemes,
         );
@@ -159,7 +159,7 @@ mod tests {
         assert_eq!(meta.github_number, Some(7));
         assert_eq!(
             meta.github_url.as_deref(),
-            Some("https://github.com/maxgohome/pbl-graph/issues/7")
+            Some("https://github.com/example/demo-repo/issues/7")
         );
         assert_eq!(meta.branches, vec!["release/v371p5-unified-rc"]);
         assert_eq!(meta.commits, vec!["7318baf", "309afe3"]);
