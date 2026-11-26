@@ -243,6 +243,15 @@ export const en = {
     deepLinksDesc: "Comma-separated (e.g. t3-thread, vscode, cursor)",
     modulePrefixLabel: "Current Workspace Module Prefix",
     modulePrefixDesc: "Default mod:, customizable per repo (e.g. area:, pkg:)",
+    moduleAliasesLabel: "Module Display Aliases & Colors",
+    moduleAliasesDesc:
+      "Override display names and dot colors per workspace (stored in OS config dir)",
+    moduleAliasesEmpty: "No module labels detected in the active workspace yet",
+    bdStatusLabel: "Beads CLI Status",
+    bdDetected: "Detected",
+    bdMissing: "bd executable not found",
+    copyInstallCmd: "Copy install command",
+    copiedInstallCmd: "Copied install command to clipboard",
     savedHint: "Saved",
   },
   status: {

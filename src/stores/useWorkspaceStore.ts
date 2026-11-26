@@ -18,6 +18,11 @@ import {
   ipcUpdateIssue,
   ipcUpdateWorkspaceConfig,
 } from "@/lib/ipc";
+import {
+  applyOptimisticClose,
+  applyOptimisticReopen,
+  applyOptimisticUpdate,
+} from "@/lib/optimistic";
 import type {
   CreateIssueRequest,
   CrossProjectActiveItem,
@@ -44,6 +49,7 @@ interface WorkspaceState {
   loadAll: () => Promise<void>;
   refreshWorkspaces: () => Promise<void>;
   refreshAllActive: () => Promise<void>;
+  applyAllActive: (items: CrossProjectActiveItem[]) => void;
   selectWorkspace: (path: string) => Promise<void>;
   addWorkspace: (path: string) => Promise<void>;
   removeWorkspace: (path: string) => Promise<void>;
@@ -83,6 +89,10 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
   lastError: null,
   lastSyncedAt: null,
   loading: false,
+
+  applyAllActive: (items) => {
+    set({ allActive: items });
+  },
 
   applySnapshot: (snap) => {
     const active = get().activePath;
@@ -244,12 +254,22 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
   updateIssue: async (req) => {
     const active = get().activePath;
     if (!active) return;
-    set({ syncStatus: "busy" });
+    const prevSnap = get().snapshot;
+    if (prevSnap) {
+      const optimistic = applyOptimisticUpdate(prevSnap, req);
+      set({ snapshot: optimistic, byId: indexById(optimistic.issues), syncStatus: "busy" });
+    } else {
+      set({ syncStatus: "busy" });
+    }
     try {
       const snap = await ipcUpdateIssue({ ...req, workspacePath: active });
       get().applySnapshot(snap);
       void get().refreshAllActive();
     } catch (err) {
+      // Clean rollback if bd CLI rejects the mutation
+      if (prevSnap && get().activePath === active) {
+        set({ snapshot: prevSnap, byId: indexById(prevSnap.issues) });
+      }
       set({ syncStatus: "idle", lastError: formatIpcError(err) });
       throw err;
     }
@@ -258,12 +278,21 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
   closeIssue: async (issueId, reason) => {
     const active = get().activePath;
     if (!active) return;
-    set({ syncStatus: "busy" });
+    const prevSnap = get().snapshot;
+    if (prevSnap) {
+      const optimistic = applyOptimisticClose(prevSnap, issueId, reason);
+      set({ snapshot: optimistic, byId: indexById(optimistic.issues), syncStatus: "busy" });
+    } else {
+      set({ syncStatus: "busy" });
+    }
     try {
       const snap = await ipcCloseIssue(active, issueId, reason);
       get().applySnapshot(snap);
       void get().refreshAllActive();
     } catch (err) {
+      if (prevSnap && get().activePath === active) {
+        set({ snapshot: prevSnap, byId: indexById(prevSnap.issues) });
+      }
       set({ syncStatus: "idle", lastError: formatIpcError(err) });
       throw err;
     }
@@ -272,12 +301,21 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
   reopenIssue: async (issueId, reason) => {
     const active = get().activePath;
     if (!active) return;
-    set({ syncStatus: "busy" });
+    const prevSnap = get().snapshot;
+    if (prevSnap) {
+      const optimistic = applyOptimisticReopen(prevSnap, issueId);
+      set({ snapshot: optimistic, byId: indexById(optimistic.issues), syncStatus: "busy" });
+    } else {
+      set({ syncStatus: "busy" });
+    }
     try {
       const snap = await ipcReopenIssue(active, issueId, reason);
       get().applySnapshot(snap);
       void get().refreshAllActive();
     } catch (err) {
+      if (prevSnap && get().activePath === active) {
+        set({ snapshot: prevSnap, byId: indexById(prevSnap.issues) });
+      }
       set({ syncStatus: "idle", lastError: formatIpcError(err) });
       throw err;
     }

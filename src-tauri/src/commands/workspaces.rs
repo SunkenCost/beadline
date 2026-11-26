@@ -8,9 +8,18 @@ use std::path::Path;
 use tauri::{AppHandle, State};
 
 #[tauri::command]
-pub async fn list_workspaces(state: State<'_, AppState>) -> AppResult<WorkspaceListResponse> {
+pub async fn list_workspaces(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> AppResult<WorkspaceListResponse> {
+    list_and_sync(&app, &state).await
+}
+
+async fn list_and_sync(app: &AppHandle, state: &AppState) -> AppResult<WorkspaceListResponse> {
     let settings = state.settings.lock().await.clone();
-    state.workspace_mgr.list_workspaces(&settings).await
+    let list = state.workspace_mgr.list_workspaces(&settings).await?;
+    state.sync_workspace_watchers(app, list.active_path.as_deref());
+    Ok(list)
 }
 
 #[tauri::command]
@@ -23,23 +32,10 @@ pub async fn add_workspace(
     if trimmed.is_empty() || !Path::new(trimmed).is_dir() {
         return Err(AppError::WorkspaceNotFound(trimmed.to_string()));
     }
-    let norm = normalize_display_path(trimmed);
     state
         .config_store
-        .upsert_workspace(WorkspaceEntry::new(norm.clone()), true)?;
-
-    state
-        .watcher
-        .watch_workspace(
-            app,
-            norm,
-            state.workspace_mgr.clone(),
-            state.settings.clone(),
-        )
-        .await;
-
-    let settings = state.settings.lock().await.clone();
-    state.workspace_mgr.list_workspaces(&settings).await
+        .upsert_workspace(WorkspaceEntry::new(trimmed.to_owned()), true)?;
+    list_and_sync(&app, &state).await
 }
 
 #[tauri::command]
@@ -53,15 +49,7 @@ pub async fn select_workspace(
         return Err(AppError::WorkspaceNotFound(norm));
     }
     state.config_store.set_active_workspace(&norm)?;
-    state
-        .watcher
-        .watch_workspace(
-            app,
-            norm.clone(),
-            state.workspace_mgr.clone(),
-            state.settings.clone(),
-        )
-        .await;
+    state.sync_workspace_watchers(&app, None);
 
     let settings = state.settings.lock().await.clone();
     state
@@ -72,16 +60,17 @@ pub async fn select_workspace(
 
 #[tauri::command]
 pub async fn remove_workspace(
+    app: AppHandle,
     state: State<'_, AppState>,
     path: String,
 ) -> AppResult<WorkspaceListResponse> {
     state.config_store.remove_workspace(path.trim())?;
-    let settings = state.settings.lock().await.clone();
-    state.workspace_mgr.list_workspaces(&settings).await
+    list_and_sync(&app, &state).await
 }
 
 #[tauri::command]
 pub async fn update_workspace_config(
+    app: AppHandle,
     state: State<'_, AppState>,
     path: String,
     module_prefix: String,
@@ -104,8 +93,7 @@ pub async fn update_workspace_config(
         pinned,
     };
     state.config_store.upsert_workspace(entry, false)?;
-    let settings = state.settings.lock().await.clone();
-    state.workspace_mgr.list_workspaces(&settings).await
+    list_and_sync(&app, &state).await
 }
 
 #[tauri::command]
@@ -120,14 +108,6 @@ pub async fn init_beads(
         .workspace_mgr
         .init_beads(path.trim(), prefix, &settings)
         .await?;
-    state
-        .watcher
-        .watch_workspace(
-            app,
-            snap.repo_path.clone(),
-            state.workspace_mgr.clone(),
-            state.settings.clone(),
-        )
-        .await;
+    state.sync_workspace_watchers(&app, None);
     Ok(snap)
 }

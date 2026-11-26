@@ -1,14 +1,27 @@
-import { Check, Copy, Monitor, Moon, RotateCcw, Sun, Trash2, Upload } from "lucide-react";
+import {
+  AlertTriangle,
+  Check,
+  CheckCircle2,
+  Copy,
+  Monitor,
+  Moon,
+  RotateCcw,
+  Sun,
+  Trash2,
+  Upload,
+} from "lucide-react";
 import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/Button";
 import { Dialog } from "@/components/ui/Dialog";
 import { Switch } from "@/components/ui/Switch";
 import { useT } from "@/i18n";
+import { ipcDetectBdPath } from "@/lib/ipc";
+import { resolveModule } from "@/lib/modules";
 import { exportCurrentThemeJson, isSafeCssColor, parseThemeJson } from "@/lib/theme";
 import { useSettingsStore } from "@/stores/useSettingsStore";
 import { useUiStore } from "@/stores/useUiStore";
 import { useWorkspaceStore } from "@/stores/useWorkspaceStore";
-import type { AppearanceMode, DensityMode, RadiusScale } from "@/types/ipc";
+import type { AppearanceMode, DensityMode, ModuleAliasConfig, RadiusScale } from "@/types/ipc";
 import { THEME_PRESETS } from "@/types/theme";
 
 const APPEARANCE_OPTIONS: readonly { id: AppearanceMode; icon: typeof Sun }[] = [
@@ -20,6 +33,16 @@ const APPEARANCE_OPTIONS: readonly { id: AppearanceMode; icon: typeof Sun }[] = 
 const RADIUS_OPTIONS: readonly RadiusScale[] = ["sharp", "default", "soft"];
 const DENSITY_OPTIONS: readonly DensityMode[] = ["compact", "comfortable"];
 const ACCENT_SWATCHES = ["#D97757", "#5E6AD2", "#16803C", "#0EA5E9", "#A855F7", "#E11D48"] as const;
+const MODULE_COLORS = [
+  "#D97757",
+  "#6EA1E8",
+  "#A78BFA",
+  "#46B574",
+  "#38BDF8",
+  "#E0A84B",
+  "#F472B6",
+  "#94A3B8",
+] as const;
 
 type SettingsTab = "appearance" | "general";
 
@@ -30,6 +53,7 @@ export function SettingsModal() {
 
   const {
     settings,
+    platform,
     setLanguage,
     setThemePreset,
     setAppearance,
@@ -42,26 +66,37 @@ export function SettingsModal() {
     updateSettings,
   } = useSettingsStore();
 
-  const { workspaces, activePath, updateWorkspaceConfig } = useWorkspaceStore();
+  const { workspaces, activePath, snapshot, updateWorkspaceConfig } = useWorkspaceStore();
   const currentWs = workspaces.find(
     (w) => activePath && w.path.toLowerCase() === activePath.toLowerCase(),
   );
 
   const [tab, setTab] = useState<SettingsTab>("appearance");
   const [bdPathDraft, setBdPathDraft] = useState(settings.bdPath ?? "");
+  const [detectedBd, setDetectedBd] = useState<string | null | undefined>(undefined);
   const [schemesDraft, setSchemesDraft] = useState(settings.deepLinkSchemes.join(", "));
   const [modPrefixDraft, setModPrefixDraft] = useState(currentWs?.modulePrefix ?? "mod:");
+  const [aliasesDraft, setAliasesDraft] = useState<Record<string, ModuleAliasConfig>>({});
   const [themeJsonDraft, setThemeJsonDraft] = useState("");
   const [statusMsg, setStatusMsg] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
 
   useEffect(() => {
-    if (open) {
-      setBdPathDraft(settings.bdPath ?? "");
-      setSchemesDraft(settings.deepLinkSchemes.join(", "));
-      setModPrefixDraft(currentWs?.modulePrefix ?? "mod:");
-      setStatusMsg(null);
-    }
-  }, [open, settings.bdPath, settings.deepLinkSchemes, currentWs?.modulePrefix]);
+    if (!open) return;
+    setBdPathDraft(settings.bdPath ?? "");
+    setSchemesDraft(settings.deepLinkSchemes.join(", "));
+    setModPrefixDraft(currentWs?.modulePrefix ?? "mod:");
+    setAliasesDraft({ ...(currentWs?.moduleAliases ?? {}) });
+    setStatusMsg(null);
+    void ipcDetectBdPath()
+      .then((found) => setDetectedBd(found))
+      .catch(() => setDetectedBd(null));
+  }, [
+    open,
+    settings.bdPath,
+    settings.deepLinkSchemes,
+    currentWs?.modulePrefix,
+    currentWs?.moduleAliases,
+  ]);
 
   const showNotice = (kind: "ok" | "err", text: string) => {
     setStatusMsg({ kind, text });
@@ -85,13 +120,23 @@ export function SettingsModal() {
       deepLinkSchemes: schemes.length ? schemes : ["t3-thread", "vscode", "cursor"],
     });
     if (currentWs) {
+      const cleanedAliases: Record<string, ModuleAliasConfig> = {};
+      for (const [k, v] of Object.entries(aliasesDraft)) {
+        const lbl = v.label?.trim() || null;
+        const col = v.color?.trim() || null;
+        if (lbl || col) {
+          cleanedAliases[k] = { label: lbl, color: col };
+        }
+      }
       await updateWorkspaceConfig({
         path: currentWs.path,
         modulePrefix: modPrefixDraft.trim() || "mod:",
-        moduleAliases: currentWs.moduleAliases,
+        moduleAliases: cleanedAliases,
         pinned: currentWs.pinned,
       });
     }
+    const found = await ipcDetectBdPath().catch(() => null);
+    setDetectedBd(found);
     showNotice("ok", t.settings.savedHint);
   };
 
@@ -113,13 +158,18 @@ export function SettingsModal() {
     showNotice("ok", `${t.theme.importedTheme}: ${res.theme.name}`);
   };
 
+  const installCmd =
+    platform.os === "windows" ? "winget install -e --id GasTownHall.Beads" : "brew install beads";
+
+  const activeModules = snapshot?.modules ?? [];
+
   return (
     <Dialog
       open={open}
       onOpenChange={setOpen}
       title={t.settings.title}
       description={t.settings.subtitle}
-      maxWidthClass="max-w-[620px]"
+      maxWidthClass="max-w-[640px]"
       footer={
         <div className="flex w-full items-center justify-between gap-2">
           <div className="min-h-[18px] text-[11.5px]">
@@ -422,6 +472,39 @@ export function SettingsModal() {
             </div>
           </div>
 
+          {/* bd CLI Health Banner */}
+          <div className="flex items-center justify-between gap-3 rounded-[var(--radius-md)] border border-[var(--border)] bg-[var(--surface-subtle)] px-3 py-2.5">
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center gap-1.5 text-[12px] font-medium text-[var(--fg)]">
+                {detectedBd ? (
+                  <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-[var(--success)]" />
+                ) : (
+                  <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-[var(--warning)]" />
+                )}
+                <span>
+                  {t.settings.bdStatusLabel} ·{" "}
+                  {detectedBd ? t.settings.bdDetected : t.settings.bdMissing}
+                </span>
+              </div>
+              <div className="mt-0.5 truncate font-mono-tabular text-[10.5px] text-[var(--fg-3)]">
+                {detectedBd ?? installCmd}
+              </div>
+            </div>
+            {!detectedBd && (
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => {
+                  void navigator.clipboard?.writeText(installCmd);
+                  showNotice("ok", t.settings.copiedInstallCmd);
+                }}
+              >
+                <Copy className="h-3 w-3" />
+                <span>{t.settings.copyInstallCmd}</span>
+              </Button>
+            )}
+          </div>
+
           {/* Force Writes */}
           <div className="flex items-center justify-between gap-4 border-b border-[var(--border-subtle)] pb-4">
             <div>
@@ -452,24 +535,96 @@ export function SettingsModal() {
             />
           </div>
 
-          {/* Per-workspace Module Prefix */}
+          {/* Per-workspace Module Prefix & Aliases */}
           {currentWs && (
-            <div className="flex flex-col gap-1.5">
-              <label
-                htmlFor="mod-prefix-input"
-                className="text-[12px] font-medium text-[var(--fg)]"
-              >
-                {t.settings.modulePrefixLabel} ({currentWs.name})
-              </label>
-              <input
-                id="mod-prefix-input"
-                type="text"
-                value={modPrefixDraft}
-                onChange={(e) => setModPrefixDraft(e.target.value)}
-                placeholder="mod:"
-                className="h-8 rounded-[var(--radius-sm)] border border-[var(--border)] bg-[var(--surface-subtle)] px-2.5 font-mono-tabular text-[12px] text-[var(--fg)] focus:border-[var(--border-strong)]"
-              />
-              <span className="text-[11px] text-[var(--fg-3)]">{t.settings.modulePrefixDesc}</span>
+            <div className="space-y-3 rounded-[var(--radius-md)] border border-[var(--border)] bg-[var(--surface-subtle)] p-3">
+              <div className="flex flex-col gap-1.5">
+                <label
+                  htmlFor="mod-prefix-input"
+                  className="text-[12px] font-medium text-[var(--fg)]"
+                >
+                  {t.settings.modulePrefixLabel} ({currentWs.name})
+                </label>
+                <input
+                  id="mod-prefix-input"
+                  type="text"
+                  value={modPrefixDraft}
+                  onChange={(e) => setModPrefixDraft(e.target.value)}
+                  placeholder="mod:"
+                  className="h-8 rounded-[var(--radius-sm)] border border-[var(--border)] bg-[var(--surface)] px-2.5 font-mono-tabular text-[12px] text-[var(--fg)] focus:border-[var(--border-strong)]"
+                />
+                <span className="text-[11px] text-[var(--fg-3)]">
+                  {t.settings.modulePrefixDesc}
+                </span>
+              </div>
+
+              <div className="space-y-1.5 border-t border-[var(--border-subtle)] pt-2.5">
+                <div className="text-[12px] font-medium text-[var(--fg)]">
+                  {t.settings.moduleAliasesLabel}
+                </div>
+                <div className="text-[11px] text-[var(--fg-3)]">{t.settings.moduleAliasesDesc}</div>
+                {activeModules.length === 0 ? (
+                  <div className="text-[11.5px] text-[var(--fg-3)]">
+                    {t.settings.moduleAliasesEmpty}
+                  </div>
+                ) : (
+                  <div className="space-y-1.5 pt-1">
+                    {activeModules.map((m) => {
+                      const resolved = resolveModule(
+                        m.key,
+                        modPrefixDraft || "mod:",
+                        settings.language,
+                        aliasesDraft,
+                      );
+                      const cur = aliasesDraft[m.key] ?? {};
+                      return (
+                        <div key={m.key} className="flex items-center gap-2">
+                          <span className="w-28 shrink-0 truncate font-mono-tabular text-[11px] text-[var(--fg-3)]">
+                            {m.key}
+                          </span>
+                          <input
+                            type="text"
+                            value={cur.label ?? ""}
+                            placeholder={resolved.label}
+                            onChange={(e) =>
+                              setAliasesDraft((prev) => ({
+                                ...prev,
+                                [m.key]: { ...prev[m.key], label: e.target.value },
+                              }))
+                            }
+                            className="h-7 min-w-0 flex-1 rounded-[var(--radius-xs)] border border-[var(--border)] bg-[var(--surface)] px-2 text-[12px] text-[var(--fg)]"
+                          />
+                          <div className="flex items-center gap-1">
+                            {MODULE_COLORS.slice(0, 6).map((hex) => {
+                              const picked =
+                                (cur.color ?? resolved.color).toLowerCase() === hex.toLowerCase();
+                              return (
+                                <button
+                                  key={hex}
+                                  type="button"
+                                  aria-label={hex}
+                                  onClick={() =>
+                                    setAliasesDraft((prev) => ({
+                                      ...prev,
+                                      [m.key]: { ...prev[m.key], color: hex },
+                                    }))
+                                  }
+                                  className={`h-4 w-4 rounded-full cursor-pointer transition-transform ${
+                                    picked
+                                      ? "scale-115 ring-1 ring-[var(--fg)] ring-offset-1 ring-offset-[var(--surface-subtle)]"
+                                      : "opacity-75 hover:opacity-100"
+                                  }`}
+                                  style={{ backgroundColor: hex }}
+                                />
+                              );
+                            })}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
             </div>
           )}
 

@@ -13,6 +13,7 @@ import {
 import { useEffect, useMemo, useState } from "react";
 import { Button } from "@/components/ui/Button";
 import { StatusRing } from "@/components/ui/Icons";
+import { MiniMarkdown } from "@/components/ui/MiniMarkdown";
 import { useT } from "@/i18n";
 import { formatIpcError, ipcGetIssueComments, ipcOpenExternalLink, ipcRevealPath } from "@/lib/ipc";
 import { resolveModule } from "@/lib/modules";
@@ -686,20 +687,14 @@ export function IssueDrawer({ modulePrefix, moduleAliases, onRequestClose }: Iss
               </div>
             ) : (
               <div className="space-y-2.5">
-                <div className="whitespace-pre-wrap break-words rounded-[var(--radius-md)] border border-[var(--border)] bg-[var(--surface-subtle)] p-3 text-[12.5px] leading-relaxed text-[var(--fg)] select-text">
-                  {issue.description.trim() || (
-                    <span className="text-[var(--fg-3)]">{t.drawer.noContent}</span>
-                  )}
-                </div>
+                <MiniMarkdown content={issue.description} emptyText={t.drawer.noContent} />
 
                 {issue.acceptanceCriteria.trim() && (
                   <>
                     <div className="text-[11.5px] font-semibold text-[var(--fg-3)]">
                       {t.drawer.acceptance}
                     </div>
-                    <div className="whitespace-pre-wrap break-words rounded-[var(--radius-md)] border border-[var(--border)] bg-[var(--surface-subtle)] p-3 text-[12.5px] leading-relaxed text-[var(--fg)] select-text">
-                      {issue.acceptanceCriteria}
-                    </div>
+                    <MiniMarkdown content={issue.acceptanceCriteria} />
                   </>
                 )}
 
@@ -708,9 +703,7 @@ export function IssueDrawer({ modulePrefix, moduleAliases, onRequestClose }: Iss
                     <div className="text-[11.5px] font-semibold text-[var(--fg-3)]">
                       {t.drawer.notes}
                     </div>
-                    <div className="whitespace-pre-wrap break-words rounded-[var(--radius-md)] border border-[var(--border)] bg-[var(--surface-subtle)] p-3 font-mono-tabular text-[11.5px] leading-relaxed text-[var(--fg-2)] select-text">
-                      {issue.notes}
-                    </div>
+                    <MiniMarkdown content={issue.notes} tone="muted" />
                   </>
                 )}
 
@@ -719,9 +712,7 @@ export function IssueDrawer({ modulePrefix, moduleAliases, onRequestClose }: Iss
                     <div className="text-[11.5px] font-semibold text-[var(--fg-3)]">
                       {t.drawer.closeReason}
                     </div>
-                    <div className="whitespace-pre-wrap break-words rounded-[var(--radius-md)] border border-[var(--border)] bg-[var(--success-soft)] p-3 text-[12.5px] leading-relaxed text-[var(--fg)] select-text">
-                      {issue.closeReason}
-                    </div>
+                    <MiniMarkdown content={issue.closeReason} tone="success" />
                   </>
                 )}
               </div>

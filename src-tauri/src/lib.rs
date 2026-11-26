@@ -10,7 +10,7 @@ use crate::engine::workspace_mgr::WorkspaceManager;
 use crate::models::settings::{AppSettings, WindowGeometry};
 use crate::watcher::fs_watcher::FsWatcherManager;
 use std::sync::Arc;
-use tauri::{Manager, PhysicalPosition, PhysicalSize, WindowEvent};
+use tauri::{AppHandle, Manager, PhysicalPosition, PhysicalSize, RunEvent, WindowEvent};
 use tokio::sync::Mutex;
 use tracing::{info, warn};
 
@@ -19,6 +19,18 @@ pub struct AppState {
     pub settings: Arc<Mutex<AppSettings>>,
     pub workspace_mgr: Arc<WorkspaceManager>,
     pub watcher: Arc<FsWatcherManager>,
+}
+
+impl AppState {
+    fn sync_workspace_watchers(&self, app: &AppHandle, fallback_active: Option<&str>) {
+        self.watcher.sync_workspaces(
+            app,
+            &self.config_store,
+            &self.workspace_mgr,
+            &self.settings,
+            fallback_active,
+        );
+    }
 }
 
 fn init_tracing() {
@@ -107,7 +119,7 @@ pub fn run() {
             info!("Beadline initialized (v{})", env!("CARGO_PKG_VERSION"));
 
             let workspace_mgr = Arc::new(WorkspaceManager::new(config_store.clone()));
-            let watcher = Arc::new(FsWatcherManager::new());
+            let watcher = Arc::new(FsWatcherManager::default());
 
             let state = AppState {
                 config_store: config_store.clone(),
@@ -188,6 +200,11 @@ pub fn run() {
             commands::system::reveal_path,
             commands::system::detect_bd_path,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running Beadline");
+        .build(tauri::generate_context!())
+        .expect("error while building Beadline")
+        .run(|app, event| {
+            if let RunEvent::Exit = event {
+                app.state::<AppState>().watcher.shutdown();
+            }
+        });
 }

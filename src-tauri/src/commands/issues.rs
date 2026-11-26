@@ -18,15 +18,7 @@ pub async fn get_snapshot(
         .workspace_mgr
         .get_snapshot(&workspace_path, &settings, force.unwrap_or(false))
         .await?;
-    state
-        .watcher
-        .watch_workspace(
-            app,
-            snap.repo_path.clone(),
-            state.workspace_mgr.clone(),
-            state.settings.clone(),
-        )
-        .await;
+    state.sync_workspace_watchers(&app, Some(&snap.repo_path));
     Ok(snap)
 }
 

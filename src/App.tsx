@@ -11,12 +11,10 @@ import {
   Settings,
   X,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { IssueDrawer } from "@/components/drawer/IssueDrawer";
 import { CloseIssueDialog } from "@/components/modals/CloseIssueDialog";
 import { CreateIssueModal } from "@/components/modals/CreateIssueModal";
-import { SettingsModal } from "@/components/settings/SettingsModal";
-import { CommandPalette } from "@/components/shell/CommandPalette";
 import { Titlebar } from "@/components/shell/Titlebar";
 import { WorkspaceSwitcher } from "@/components/shell/WorkspaceSwitcher";
 import { Button } from "@/components/ui/Button";
@@ -24,9 +22,19 @@ import { ToastStack } from "@/components/ui/Toast";
 import { Tooltip, TooltipProvider } from "@/components/ui/Tooltip";
 import { AllActiveView } from "@/components/views/AllActiveView";
 import { BoardView } from "@/components/views/BoardView";
-import { DagView } from "@/components/views/DagView";
 import { EpicsView } from "@/components/views/EpicsView";
 import { ListView } from "@/components/views/ListView";
+
+const DagView = lazy(() =>
+  import("@/components/views/DagView").then((m) => ({ default: m.DagView })),
+);
+const SettingsModal = lazy(() =>
+  import("@/components/settings/SettingsModal").then((m) => ({ default: m.SettingsModal })),
+);
+const CommandPalette = lazy(() =>
+  import("@/components/shell/CommandPalette").then((m) => ({ default: m.CommandPalette })),
+);
+
 import { useGlobalShortcuts } from "@/hooks/useGlobalShortcuts";
 import { useSnapshotEvents } from "@/hooks/useSnapshotEvents";
 import { useT } from "@/i18n";
@@ -282,7 +290,7 @@ export function App() {
 
   return (
     <TooltipProvider delay={300}>
-      <div className="flex h-screen w-screen flex-col overflow-hidden bg-[var(--bg)] text-[var(--fg)]">
+      <div className="flex h-screen w-screen flex-col overflow-hidden bg-[var(--bg)] text-[var(--fg)] ring-1 ring-inset ring-[var(--border)]">
         <Titlebar />
 
         <div className="flex min-h-0 flex-1 overflow-hidden">
@@ -695,12 +703,14 @@ export function App() {
                 moduleAliases={moduleAliases}
               />
             ) : activeView === "dag" ? (
-              <DagView
-                issues={searchScopedIssues}
-                edges={snapshot.edges}
-                modulePrefix={modulePrefix}
-                moduleAliases={moduleAliases}
-              />
+              <Suspense fallback={null}>
+                <DagView
+                  issues={searchScopedIssues}
+                  edges={snapshot.edges}
+                  modulePrefix={modulePrefix}
+                  moduleAliases={moduleAliases}
+                />
+              </Suspense>
             ) : (
               <ListView
                 issues={searchScopedIssues}
@@ -719,8 +729,10 @@ export function App() {
         />
         <CreateIssueModal modulePrefix={modulePrefix} moduleAliases={moduleAliases} />
         <CloseIssueDialog issue={closingIssue} onDone={() => setClosingIssue(null)} />
-        <CommandPalette />
-        <SettingsModal />
+        <Suspense fallback={null}>
+          <CommandPalette />
+          <SettingsModal />
+        </Suspense>
         <ToastStack />
       </div>
     </TooltipProvider>

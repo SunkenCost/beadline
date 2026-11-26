@@ -1,16 +1,17 @@
-use crate::config::store::normalize_display_path;
+use crate::config::store::{normalize_display_path, ConfigStore};
 use crate::engine::workspace_mgr::{log_watch_warning, WorkspaceManager};
 use crate::models::settings::AppSettings;
-use notify::{Event, RecommendedWatcher, RecursiveMode, Watcher};
-use std::path::PathBuf;
-use std::sync::Arc;
+use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
+use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tauri::{AppHandle, Emitter};
-use tokio::sync::{mpsc, Mutex};
+use tokio::sync::{mpsc, Mutex as AsyncMutex, Notify};
 use tokio::task::JoinHandle;
-use tracing::{debug, info};
 
 pub const SNAPSHOT_UPDATED_EVENT: &str = "beadline://snapshot-updated";
+pub const ALL_ACTIVE_UPDATED_EVENT: &str = "beadline://all-active-updated";
 
 struct ActiveWatch {
     path: String,
@@ -18,113 +19,409 @@ struct ActiveWatch {
     task: JoinHandle<()>,
 }
 
-pub struct FsWatcherManager {
-    active: Mutex<Option<ActiveWatch>>,
+impl Drop for ActiveWatch {
+    fn drop(&mut self) {
+        self.task.abort();
+    }
 }
 
-impl Default for FsWatcherManager {
-    fn default() -> Self {
-        Self::new()
+#[derive(Default)]
+struct BackgroundChanges {
+    paths: Mutex<BackgroundPaths>,
+    ready: Notify,
+}
+
+#[derive(Default)]
+struct BackgroundPaths {
+    watched: HashMap<PathBuf, String>,
+    dirty: HashSet<String>,
+}
+
+impl BackgroundChanges {
+    fn native_watcher(self: &Arc<Self>) -> notify::Result<RecommendedWatcher> {
+        let changes = Arc::clone(self);
+        notify::recommended_watcher(move |result: notify::Result<Event>| {
+            if let Ok(event) = result {
+                changes.mark_event(event);
+            }
+        })
     }
+
+    fn mark_event(&self, event: Event) {
+        if matches!(event.kind, EventKind::Access(_)) {
+            return;
+        }
+        if let Ok(mut paths) = self.paths.lock() {
+            let was_empty = paths.dirty.is_empty();
+            let BackgroundPaths { watched, dirty } = &mut *paths;
+            for path in event.paths {
+                for root in path.ancestors().skip(1) {
+                    if let Some(workspace) = watched.get(root) {
+                        if path.strip_prefix(root).is_ok_and(is_relevant_path) {
+                            dirty.insert(workspace.clone());
+                        }
+                        break;
+                    }
+                }
+            }
+            if was_empty && !dirty.is_empty() {
+                self.ready.notify_one();
+            }
+        }
+    }
+
+    fn take(&self) -> HashSet<String> {
+        self.paths
+            .lock()
+            .map(|mut paths| std::mem::take(&mut paths.dirty))
+            .unwrap_or_default()
+    }
+}
+
+struct BackgroundWatch {
+    watcher: RecommendedWatcher,
+    changes: Arc<BackgroundChanges>,
+    task: JoinHandle<()>,
+}
+
+impl Drop for BackgroundWatch {
+    fn drop(&mut self) {
+        self.task.abort();
+    }
+}
+
+#[derive(Default)]
+struct WatchState {
+    active: Option<ActiveWatch>,
+    background: Option<BackgroundWatch>,
+}
+
+#[derive(Default)]
+pub struct FsWatcherManager {
+    state: Mutex<WatchState>,
 }
 
 impl FsWatcherManager {
-    pub fn new() -> Self {
-        Self {
-            active: Mutex::new(None),
+    pub fn sync_workspaces(
+        &self,
+        app: &AppHandle,
+        config_store: &ConfigStore,
+        workspace_mgr: &Arc<WorkspaceManager>,
+        settings: &Arc<AsyncMutex<AppSettings>>,
+        fallback_active: Option<&str>,
+    ) {
+        let Ok(mut state) = self.state.lock() else {
+            return;
+        };
+        // Read the current registry after taking the lock so overlapping commands
+        // never install watches using an older registry.
+        let registry = config_store.load_workspaces();
+        let active = registry
+            .active_path
+            .as_deref()
+            .filter(|path| Path::new(path).is_dir())
+            .or(fallback_active.filter(|_| !registry.entries.is_empty()))
+            .map(normalize_display_path)
+            .filter(|path| Path::new(path).join(".beads").is_dir());
+
+        if active.as_deref() != state.active.as_ref().map(|watch| watch.path.as_str()) {
+            state.active = None;
+            if let Some(path) = &active {
+                state.active = ActiveWatch::start(
+                    path.clone(),
+                    app.clone(),
+                    Arc::clone(workspace_mgr),
+                    Arc::clone(settings),
+                );
+            }
+        }
+
+        let desired: HashSet<_> = registry
+            .entries
+            .iter()
+            .map(|entry| normalize_display_path(&entry.path))
+            .filter(|path| Some(path) != active.as_ref() && Path::new(path).join(".beads").is_dir())
+            .collect();
+
+        if desired.is_empty() {
+            state.background = None;
+            return;
+        }
+        if state.background.is_none() {
+            state.background = BackgroundWatch::start(
+                app.clone(),
+                Arc::clone(workspace_mgr),
+                Arc::clone(settings),
+            );
+        }
+        if state
+            .background
+            .as_mut()
+            .is_some_and(|watch| !watch.sync(&desired))
+        {
+            state.background = None;
         }
     }
 
-    pub async fn watch_workspace(
-        &self,
+    pub fn shutdown(&self) {
+        if let Ok(mut state) = self.state.lock() {
+            *state = WatchState::default();
+        }
+    }
+}
+
+impl ActiveWatch {
+    fn start(
+        path: String,
         app: AppHandle,
-        workspace_path: String,
         workspace_mgr: Arc<WorkspaceManager>,
-        settings: Arc<Mutex<AppSettings>>,
-    ) {
-        let norm = normalize_display_path(&workspace_path);
-        let mut guard = self.active.lock().await;
-        if let Some(prev) = guard.as_ref() {
-            if prev.path.eq_ignore_ascii_case(&norm) {
-                return;
-            }
-        }
-        if let Some(prev) = guard.take() {
-            prev.task.abort();
-            debug!(path = %prev.path, "detached previous workspace watcher");
-        }
-
-        let beads_dir = PathBuf::from(&norm).join(".beads");
-        if !beads_dir.is_dir() {
-            return;
-        }
-
-        let (tx, mut rx) = mpsc::channel::<()>(16);
-
-        let watcher_res = notify::recommended_watcher(move |res: Result<Event, notify::Error>| {
-            if let Ok(ev) = res {
-                let relevant = ev.paths.iter().any(|p| {
-                    let name = p
-                        .file_name()
-                        .and_then(|n| n.to_str())
-                        .unwrap_or("")
-                        .to_lowercase();
-                    if name.ends_with(".lock")
-                        || name.ends_with(".tmp")
-                        || name == "lock"
-                        || name.contains("tempfiles")
-                    {
-                        return false;
-                    }
-                    name == "issues.jsonl" || name == "manifest" || name == "head"
-                });
-                if relevant {
-                    let _ = tx.try_send(());
-                }
-            }
-        });
-
-        let mut watcher = match watcher_res {
-            Ok(w) => w,
-            Err(err) => {
-                log_watch_warning(&format!("failed to create notify watcher: {err}"));
-                return;
-            }
-        };
-
-        if let Err(err) = watcher.watch(&beads_dir, RecursiveMode::Recursive) {
-            log_watch_warning(&format!("failed to watch {}: {err}", beads_dir.display()));
-            return;
-        }
-
-        info!(path = %norm, "watching .beads directory");
-
-        let watch_path = norm.clone();
+        settings: Arc<AsyncMutex<AppSettings>>,
+    ) -> Option<Self> {
+        let mut last_fp = workspace_mgr.fingerprint_for(&path);
+        let (tx, mut rx) = mpsc::channel(1);
+        let watcher = watch_beads(&path, move || {
+            let _ = tx.try_send(());
+        })?;
+        let watch_path = path.clone();
         let task = tokio::spawn(async move {
-            let mut last_fp = workspace_mgr.fingerprint_for(&watch_path);
-
             while rx.recv().await.is_some() {
-                // Coalesce bursty filesystem events over a 250ms debounce window
                 tokio::time::sleep(Duration::from_millis(250)).await;
-                while rx.try_recv().is_ok() {}
+                // Consume the trailing wake-up, if any, from the same burst.
+                let _ = rx.try_recv();
 
-                let current_fp = workspace_mgr.fingerprint_for(&watch_path);
-                if current_fp == last_fp {
+                if workspace_mgr.fingerprint_for(&watch_path) == last_fp {
                     continue;
                 }
-                last_fp = current_fp;
-
                 let cfg = settings.lock().await.clone();
                 if let Ok(snap) = workspace_mgr.get_snapshot(&watch_path, &cfg, false).await {
-                    let _ = app.emit(SNAPSHOT_UPDATED_EVENT, &snap);
+                    if snap.fingerprint != last_fp {
+                        last_fp.clone_from(&snap.fingerprint);
+                        let _ = app.emit(SNAPSHOT_UPDATED_EVENT, &snap);
+                    }
                 }
             }
         });
-
-        *guard = Some(ActiveWatch {
-            path: norm,
+        Some(Self {
+            path,
             _watcher: watcher,
             task,
+        })
+    }
+}
+
+impl BackgroundWatch {
+    fn start(
+        app: AppHandle,
+        workspace_mgr: Arc<WorkspaceManager>,
+        settings: Arc<AsyncMutex<AppSettings>>,
+    ) -> Option<Self> {
+        let changes = Arc::new(BackgroundChanges::default());
+        let pending = Arc::clone(&changes);
+        let watcher = changes
+            .native_watcher()
+            .map_err(|err| {
+                log_watch_warning(&format!("failed to create background watcher: {err}"))
+            })
+            .ok()?;
+        // One debouncer for all background repos keeps a burst of edits from
+        // triggering one complete cross-project scan per repository.
+        let task = tokio::spawn(async move {
+            loop {
+                pending.ready.notified().await;
+                tokio::time::sleep(Duration::from_millis(350)).await;
+                let paths = pending.take();
+                if paths.is_empty() {
+                    continue;
+                }
+
+                let cfg = settings.lock().await.clone();
+                for path in paths {
+                    workspace_mgr.refresh_stale_jsonl(path, &cfg).await;
+                }
+                if let Ok(items) = workspace_mgr.get_all_active(&cfg).await {
+                    let _ = app.emit(ALL_ACTIVE_UPDATED_EVENT, &items);
+                }
+            }
         });
+        Some(Self {
+            watcher,
+            changes,
+            task,
+        })
+    }
+
+    fn sync(&mut self, desired: &HashSet<String>) -> bool {
+        let Ok(mut paths) = self.changes.paths.lock() else {
+            return false;
+        };
+        let removed: Vec<_> = paths
+            .watched
+            .iter()
+            .filter(|(_, workspace)| !desired.contains(*workspace))
+            .map(|(root, _)| root.clone())
+            .collect();
+        for root in &removed {
+            paths.watched.remove(root);
+        }
+        paths.dirty.retain(|workspace| desired.contains(workspace));
+        // notify can call the event handler while processing watch/unwatch.
+        drop(paths);
+        for root in removed {
+            if let Err(err) = self.watcher.unwatch(&root) {
+                log_watch_warning(&format!("failed to unwatch {}: {err}", root.display()));
+            }
+        }
+
+        for path in desired {
+            let root = Path::new(path).join(".beads");
+            let Ok(mut paths) = self.changes.paths.lock() else {
+                return false;
+            };
+            if paths.watched.contains_key(&root) {
+                continue;
+            }
+            paths.watched.insert(root.clone(), path.clone());
+            drop(paths);
+            if let Err(err) = self.watcher.watch(&root, RecursiveMode::Recursive) {
+                if let Ok(mut paths) = self.changes.paths.lock() {
+                    paths.watched.remove(&root);
+                    paths.dirty.remove(path);
+                }
+                log_watch_warning(&format!("failed to watch {}: {err}", root.display()));
+            }
+        }
+        self.changes
+            .paths
+            .lock()
+            .is_ok_and(|paths| !paths.watched.is_empty())
+    }
+}
+
+fn watch_beads(path: &str, on_change: impl Fn() + Send + 'static) -> Option<RecommendedWatcher> {
+    let beads_dir = PathBuf::from(path).join(".beads");
+    let event_root = beads_dir.clone();
+    let handler = move |result: Result<Event, notify::Error>| {
+        if let Ok(event) = result {
+            // Reads can generate access events on some platforms. Never feed
+            // our own JSONL reads back into either refresh loop.
+            if !matches!(event.kind, EventKind::Access(_))
+                && event
+                    .paths
+                    .iter()
+                    .any(|path| path.strip_prefix(&event_root).is_ok_and(is_relevant_path))
+            {
+                on_change();
+            }
+        }
+    };
+    let result = notify::recommended_watcher(handler).and_then(|mut watcher| {
+        watcher.watch(&beads_dir, RecursiveMode::Recursive)?;
+        Ok(watcher)
+    });
+    match result {
+        Ok(watcher) => Some(watcher),
+        Err(err) => {
+            log_watch_warning(&format!("failed to watch {}: {err}", beads_dir.display()));
+            None
+        }
+    }
+}
+
+// Accept paths relative to .beads, including nested Dolt manifests and HEADs.
+fn is_relevant_path(relative: &Path) -> bool {
+    if relative.components().any(|part| {
+        let Some(name) = part.as_os_str().to_str() else {
+            return false;
+        };
+        let lower = name.to_ascii_lowercase();
+        lower.ends_with(".lock")
+            || lower.ends_with(".tmp")
+            || lower == "lock"
+            || lower == "tempfiles"
+    }) {
+        return false;
+    }
+    relative
+        .file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| matches!(name, "issues.jsonl" | "manifest" | "HEAD"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn accepts_jsonl_and_dolt_metadata() {
+        for path in [
+            "issues.jsonl",
+            "manifest",
+            "HEAD",
+            "embeddeddolt/repo/.dolt/noms/manifest",
+            "dolt/repo/.dolt/HEAD",
+        ] {
+            assert!(is_relevant_path(Path::new(path)), "{path}");
+        }
+    }
+
+    #[test]
+    fn rejects_lock_temp_and_unrelated_paths() {
+        for path in [
+            "issues.jsonl.lock",
+            "issues.jsonl.tmp",
+            "dolt/repo/LOCK",
+            "dolt/tempfiles/manifest",
+            "dolt/TempFiles/HEAD",
+            "dolt/repo/atomic.tmp/HEAD",
+            "dolt/repo/manifest.lock/HEAD",
+            "dolt/repo/noms/journal",
+            "config.yaml",
+        ] {
+            assert!(!is_relevant_path(Path::new(path)), "{path}");
+        }
+    }
+
+    #[tokio::test]
+    async fn background_watcher_routes_non_active_files_and_drops_removed_roots() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let workspace = |name: &str| {
+            let root = dir.path().join(name);
+            std::fs::create_dir_all(root.join(".beads")).expect("beads dir");
+            normalize_display_path(&root.to_string_lossy())
+        };
+        let first = workspace("first");
+        let second = workspace("second");
+        let changes = Arc::new(BackgroundChanges::default());
+        let mut background = BackgroundWatch {
+            watcher: changes.native_watcher().expect("native watcher"),
+            changes: Arc::clone(&changes),
+            task: tokio::spawn(std::future::pending()),
+        };
+        assert!(background.sync(&HashSet::from([first.clone(), second.clone()])));
+
+        std::fs::write(Path::new(&first).join(".beads/issues.jsonl"), "first")
+            .expect("first write");
+        tokio::time::timeout(Duration::from_secs(5), changes.ready.notified())
+            .await
+            .expect("first workspace event");
+        assert_eq!(changes.take(), HashSet::from([first.clone()]));
+
+        assert!(background.sync(&HashSet::from([second.clone()])));
+        std::fs::write(Path::new(&first).join(".beads/HEAD"), "removed").expect("removed write");
+        std::fs::write(Path::new(&second).join(".beads/manifest"), "second").expect("second write");
+        // The first write can generate multiple events. An existing wake-up
+        // from the removed workspace may be observed with no pending work.
+        let observed = tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                changes.ready.notified().await;
+                let paths = changes.take();
+                if !paths.is_empty() {
+                    break paths;
+                }
+            }
+        })
+        .await
+        .expect("retained workspace event");
+        assert_eq!(observed, HashSet::from([second]));
     }
 }

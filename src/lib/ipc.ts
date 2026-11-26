@@ -219,3 +219,12 @@ export async function subscribeSnapshotUpdated(
     handler(ev.payload);
   });
 }
+
+export async function subscribeAllActiveUpdated(
+  handler: (items: CrossProjectActiveItem[]) => void,
+): Promise<UnlistenFn> {
+  if (!isTauriRuntime()) return () => undefined;
+  return listen<CrossProjectActiveItem[]>("beadline://all-active-updated", (ev) => {
+    handler(ev.payload);
+  });
+}

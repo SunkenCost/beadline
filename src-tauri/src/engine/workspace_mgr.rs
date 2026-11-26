@@ -7,7 +7,7 @@ use crate::engine::jsonl_reader::{
 use crate::error::{AppError, AppResult};
 use crate::models::issue::{
     BoardLane, CommentDto, CreateIssueRequest, CreateIssueResponse, GithubSyncResponse,
-    UpdateIssueRequest, WorkspaceSnapshot,
+    UpdateIssueRequest, WorkspaceSnapshot, WorktreeRef,
 };
 use crate::models::settings::AppSettings;
 use crate::models::workspace::{
@@ -16,16 +16,28 @@ use crate::models::workspace::{
 };
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
+use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
 use tracing::{debug, warn};
+
+const GIT_METADATA_TTL: Duration = Duration::from_secs(30);
+type GitMetadata = (Option<String>, Vec<WorktreeRef>);
+type GitMetadataSlot = Arc<Mutex<Option<CachedGitMetadata>>>;
+
+struct CachedGitMetadata {
+    refreshed_at: Instant,
+    value: GitMetadata,
+}
 
 pub struct WorkspaceManager {
     config_store: ConfigStore,
     write_locks: Mutex<HashMap<String, Arc<Mutex<()>>>>,
     export_in_flight: Mutex<HashMap<String, Arc<AtomicBool>>>,
+    git_metadata: Mutex<HashMap<String, GitMetadataSlot>>,
 }
 
 impl WorkspaceManager {
@@ -34,6 +46,7 @@ impl WorkspaceManager {
             config_store,
             write_locks: Mutex::new(HashMap::new()),
             export_in_flight: Mutex::new(HashMap::new()),
+            git_metadata: Mutex::new(HashMap::new()),
         }
     }
 
@@ -239,8 +252,11 @@ impl WorkspaceManager {
             }
         }
 
-        let (gh_repo, worktrees) =
-            tokio::join!(detect_github_repo(&root), list_git_worktrees(&root),);
+        let (gh_repo, worktrees) = self
+            .cached_git_metadata(&norm, force_export, || async {
+                tokio::join!(detect_github_repo(&root), list_git_worktrees(&root))
+            })
+            .await;
 
         read_workspace_snapshot(
             &root,
@@ -250,6 +266,53 @@ impl WorkspaceManager {
             &worktrees,
             &settings.deep_link_schemes,
         )
+    }
+
+    async fn cached_git_metadata<F, Fut>(
+        &self,
+        normalized_path: &str,
+        force_refresh: bool,
+        load: F,
+    ) -> GitMetadata
+    where
+        F: FnOnce() -> Fut,
+        Fut: Future<Output = GitMetadata>,
+    {
+        let slot = {
+            let mut cache = self.git_metadata.lock().await;
+            Arc::clone(cache.entry(normalized_path.to_lowercase()).or_default())
+        };
+        // Only serialize refreshes of the same workspace, not Git reads in other repos.
+        let mut entry = slot.lock().await;
+        if let Some(cached) = entry
+            .as_ref()
+            .filter(|cached| !force_refresh && cached.refreshed_at.elapsed() < GIT_METADATA_TTL)
+        {
+            return cached.value.clone();
+        }
+
+        let value = load().await;
+        *entry = Some(CachedGitMetadata {
+            refreshed_at: Instant::now(),
+            value: value.clone(),
+        });
+        value
+    }
+
+    pub(crate) async fn refresh_stale_jsonl(
+        self: &Arc<Self>,
+        normalized_path: String,
+        settings: &AppSettings,
+    ) {
+        let root = PathBuf::from(&normalized_path);
+        let beads_dir = root.join(".beads");
+        let jsonl = beads_dir.join("issues.jsonl");
+        if beads_dir.is_dir()
+            && (!jsonl.exists() || latest_dolt_mtime_ms(&beads_dir) > file_mtime_ms(&jsonl) + 250)
+        {
+            self.schedule_background_export(root, normalized_path, settings.clone())
+                .await;
+        }
     }
 
     async fn schedule_background_export(
@@ -906,4 +969,77 @@ fn derive_prefix(root: &Path) -> String {
 
 pub fn log_watch_warning(msg: &str) {
     warn!("{msg}");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn fixture() -> (tempfile::TempDir, WorkspaceManager) {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mgr = WorkspaceManager::new(ConfigStore::new(dir.path().into()).expect("config"));
+        (dir, mgr)
+    }
+
+    fn git_metadata(repo: &str) -> GitMetadata {
+        (
+            Some(repo.into()),
+            vec![WorktreeRef {
+                path: "workspace".into(),
+                branch: repo.into(),
+            }],
+        )
+    }
+
+    #[tokio::test]
+    async fn git_metadata_cache_hits_the_same_workspace_key() {
+        let (_dir, mgr) = fixture();
+        let expected = git_metadata("owner/cached");
+        mgr.cached_git_metadata("Workspace", false, || async { expected.clone() })
+            .await;
+        let result = mgr
+            .cached_git_metadata("workspace", false, || async { panic!("cache miss") })
+            .await;
+        assert_eq!(result, expected);
+        assert_eq!(
+            mgr.cached_git_metadata("other-workspace", false, || async { (None, Vec::new()) })
+                .await,
+            (None, Vec::new())
+        );
+    }
+
+    #[tokio::test]
+    async fn git_metadata_cache_expires_after_ttl() {
+        let (_dir, mgr) = fixture();
+        mgr.cached_git_metadata("workspace", false, || async { git_metadata("owner/old") })
+            .await;
+        let slot = mgr.git_metadata.lock().await["workspace"].clone();
+        slot.lock()
+            .await
+            .as_mut()
+            .expect("cached value")
+            .refreshed_at -= GIT_METADATA_TTL;
+        let expected = git_metadata("owner/fresh");
+        let result = mgr
+            .cached_git_metadata("workspace", false, || async { expected.clone() })
+            .await;
+        assert_eq!(result, expected);
+    }
+
+    #[tokio::test]
+    async fn git_metadata_force_refresh_replaces_a_fresh_entry() {
+        let (_dir, mgr) = fixture();
+        mgr.cached_git_metadata("workspace", false, || async { git_metadata("owner/old") })
+            .await;
+        let expected = git_metadata("owner/fresh");
+        let result = mgr
+            .cached_git_metadata("workspace", true, || async { expected.clone() })
+            .await;
+        assert_eq!(result, expected);
+        assert_eq!(
+            mgr.cached_git_metadata("workspace", false, || async { panic!("cache miss") })
+                .await,
+            expected
+        );
+    }
 }
