@@ -7,6 +7,7 @@ import { useT } from "@/i18n";
 import { exportCurrentThemeJson, isSafeCssColor, parseThemeJson } from "@/lib/theme";
 import { useSettingsStore } from "@/stores/useSettingsStore";
 import { useUiStore } from "@/stores/useUiStore";
+import { useWorkspaceStore } from "@/stores/useWorkspaceStore";
 import type { AppearanceMode, DensityMode, RadiusScale } from "@/types/ipc";
 import { THEME_PRESETS } from "@/types/theme";
 
@@ -41,9 +42,15 @@ export function SettingsModal() {
     updateSettings,
   } = useSettingsStore();
 
+  const { workspaces, activePath, updateWorkspaceConfig } = useWorkspaceStore();
+  const currentWs = workspaces.find(
+    (w) => activePath && w.path.toLowerCase() === activePath.toLowerCase(),
+  );
+
   const [tab, setTab] = useState<SettingsTab>("appearance");
   const [bdPathDraft, setBdPathDraft] = useState(settings.bdPath ?? "");
   const [schemesDraft, setSchemesDraft] = useState(settings.deepLinkSchemes.join(", "));
+  const [modPrefixDraft, setModPrefixDraft] = useState(currentWs?.modulePrefix ?? "mod:");
   const [themeJsonDraft, setThemeJsonDraft] = useState("");
   const [statusMsg, setStatusMsg] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
 
@@ -51,9 +58,10 @@ export function SettingsModal() {
     if (open) {
       setBdPathDraft(settings.bdPath ?? "");
       setSchemesDraft(settings.deepLinkSchemes.join(", "));
+      setModPrefixDraft(currentWs?.modulePrefix ?? "mod:");
       setStatusMsg(null);
     }
-  }, [open, settings.bdPath, settings.deepLinkSchemes]);
+  }, [open, settings.bdPath, settings.deepLinkSchemes, currentWs?.modulePrefix]);
 
   const showNotice = (kind: "ok" | "err", text: string) => {
     setStatusMsg({ kind, text });
@@ -76,6 +84,14 @@ export function SettingsModal() {
       bdPath: bdPathDraft.trim() || null,
       deepLinkSchemes: schemes.length ? schemes : ["t3-thread", "vscode", "cursor"],
     });
+    if (currentWs) {
+      await updateWorkspaceConfig({
+        path: currentWs.path,
+        modulePrefix: modPrefixDraft.trim() || "mod:",
+        moduleAliases: currentWs.moduleAliases,
+        pinned: currentWs.pinned,
+      });
+    }
     showNotice("ok", t.settings.savedHint);
   };
 
@@ -435,6 +451,27 @@ export function SettingsModal() {
               className="h-8 rounded-[var(--radius-sm)] border border-[var(--border)] bg-[var(--surface-subtle)] px-2.5 font-mono-tabular text-[12px] text-[var(--fg)] focus:border-[var(--border-strong)]"
             />
           </div>
+
+          {/* Per-workspace Module Prefix */}
+          {currentWs && (
+            <div className="flex flex-col gap-1.5">
+              <label
+                htmlFor="mod-prefix-input"
+                className="text-[12px] font-medium text-[var(--fg)]"
+              >
+                {t.settings.modulePrefixLabel} ({currentWs.name})
+              </label>
+              <input
+                id="mod-prefix-input"
+                type="text"
+                value={modPrefixDraft}
+                onChange={(e) => setModPrefixDraft(e.target.value)}
+                placeholder="mod:"
+                className="h-8 rounded-[var(--radius-sm)] border border-[var(--border)] bg-[var(--surface-subtle)] px-2.5 font-mono-tabular text-[12px] text-[var(--fg)] focus:border-[var(--border-strong)]"
+              />
+              <span className="text-[11px] text-[var(--fg-3)]">{t.settings.modulePrefixDesc}</span>
+            </div>
+          )}
 
           {/* Deep Link Schemes */}
           <div className="flex flex-col gap-1.5">

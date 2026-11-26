@@ -1,4 +1,5 @@
 import {
+  Command,
   Languages,
   Minus,
   Monitor,
@@ -38,6 +39,7 @@ export function Titlebar() {
     useSettingsStore();
   const toggleSidebar = useUiStore((s) => s.toggleSidebar);
   const setSettingsOpen = useUiStore((s) => s.setSettingsOpen);
+  const setPaletteOpen = useUiStore((s) => s.setPaletteOpen);
 
   const isMac = platform.os === "macos";
 
@@ -83,8 +85,21 @@ export function Titlebar() {
       {/* Dedicated center drag spacer — only this & brand area carry data-tauri-drag-region */}
       <div className="h-full flex-1" data-tauri-drag-region />
 
-      {/* Right: Language toggle + Theme Popover + Settings + Native Windows/Linux Caption Controls */}
+      {/* Right: Command Palette + Language + Theme Popover + Settings + Native Caption Controls */}
       <div className="flex items-center gap-1 pr-1.5">
+        <Tooltip label={t.actions.commandPalette}>
+          <Button
+            size="sm"
+            variant="ghost"
+            aria-label={t.actions.commandPalette}
+            onClick={() => setPaletteOpen(true)}
+            className="font-mono-tabular text-[11px] text-[var(--fg-3)]"
+          >
+            <Command className="h-3 w-3" />
+            <span>{isMac ? "⌘K" : "Ctrl K"}</span>
+          </Button>
+        </Tooltip>
+
         <Tooltip label={t.actions.switchLanguage}>
           <Button
             size="sm"

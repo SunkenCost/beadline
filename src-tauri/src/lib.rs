@@ -1,10 +1,14 @@
 pub mod commands;
 pub mod config;
+pub mod engine;
 pub mod error;
 pub mod models;
+pub mod watcher;
 
 use crate::config::store::ConfigStore;
+use crate::engine::workspace_mgr::WorkspaceManager;
 use crate::models::settings::{AppSettings, WindowGeometry};
+use crate::watcher::fs_watcher::FsWatcherManager;
 use std::sync::Arc;
 use tauri::{Manager, PhysicalPosition, PhysicalSize, WindowEvent};
 use tokio::sync::Mutex;
@@ -13,6 +17,8 @@ use tracing::{info, warn};
 pub struct AppState {
     pub config_store: ConfigStore,
     pub settings: Arc<Mutex<AppSettings>>,
+    pub workspace_mgr: Arc<WorkspaceManager>,
+    pub watcher: Arc<FsWatcherManager>,
 }
 
 fn init_tracing() {
@@ -39,7 +45,6 @@ fn restore_window_geometry(window: &tauri::WebviewWindow, geometry: Option<Windo
 
         let _ = window.set_size(PhysicalSize::new(width, height));
 
-        // Ensure restored position lands inside at least one connected monitor.
         let mut inside_monitor = false;
         if let Ok(monitors) = window.available_monitors() {
             for mon in monitors {
@@ -101,17 +106,20 @@ pub fn run() {
 
             info!("Beadline initialized (v{})", env!("CARGO_PKG_VERSION"));
 
+            let workspace_mgr = Arc::new(WorkspaceManager::new(config_store.clone()));
+            let watcher = Arc::new(FsWatcherManager::new());
+
             let state = AppState {
                 config_store: config_store.clone(),
                 settings: Arc::new(Mutex::new(initial_settings)),
+                workspace_mgr,
+                watcher,
             };
             app.manage(state);
 
             if let Some(window) = app.get_webview_window("main") {
                 restore_window_geometry(&window, saved_geometry);
 
-                // Track the last non-maximized bounds in memory (zero disk I/O during drag/resize)
-                // so closing while maximized preserves a clean restore size.
                 let last_normal_geo = Arc::new(std::sync::Mutex::new(
                     saved_geometry.filter(|g| !g.maximized),
                 ));
@@ -159,6 +167,26 @@ pub fn run() {
             commands::settings::get_settings,
             commands::settings::update_settings,
             commands::settings::get_platform_info,
+            commands::workspaces::list_workspaces,
+            commands::workspaces::add_workspace,
+            commands::workspaces::select_workspace,
+            commands::workspaces::remove_workspace,
+            commands::workspaces::update_workspace_config,
+            commands::workspaces::init_beads,
+            commands::issues::get_snapshot,
+            commands::issues::get_all_active,
+            commands::issues::get_issue_comments,
+            commands::issues::create_issue,
+            commands::issues::update_issue,
+            commands::issues::close_issue,
+            commands::issues::reopen_issue,
+            commands::issues::add_dependency,
+            commands::issues::remove_dependency,
+            commands::issues::add_comment,
+            commands::sync::github_sync,
+            commands::system::open_external_link,
+            commands::system::reveal_path,
+            commands::system::detect_bd_path,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Beadline");
