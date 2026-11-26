@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Beadline</title>
+    <script>
+      (() => {
+        try {
+          const preset = localStorage.getItem("beadline:preset") || "warm-claude";
+          const mode = localStorage.getItem("beadline:appearance") || "system";
+          const radius = localStorage.getItem("beadline:radius") || "default";
+          const density = localStorage.getItem("beadline:density") || "comfortable";
+          const isDark =
+            mode === "dark" ||
+            (mode === "system" &&
+              window.matchMedia("(prefers-color-scheme: dark)").matches);
+          const root = document.documentElement;
+          root.dataset.preset = preset;
+          root.dataset.theme = isDark ? "dark" : "light";
+          root.dataset.radius = radius;
+          root.dataset.density = density;
+        } catch {
+          document.documentElement.dataset.preset = "warm-claude";
+          document.documentElement.dataset.theme = "dark";
+        }
+      })();
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

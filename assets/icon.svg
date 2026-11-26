@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024" fill="none">
+  <defs>
+    <linearGradient id="bg" x1="160" y1="80" x2="864" y2="944" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#D4704D" />
+      <stop offset="100%" stop-color="#B55232" />
+    </linearGradient>
+    <linearGradient id="rim" x1="512" y1="64" x2="512" y2="960" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#FFFFFF" stop-opacity="0.24" />
+      <stop offset="100%" stop-color="#000000" stop-opacity="0.18" />
+    </linearGradient>
+  </defs>
+  <rect x="64" y="64" width="896" height="896" rx="212" fill="url(#bg)" />
+  <rect x="70" y="70" width="884" height="884" rx="206" stroke="url(#rim)" stroke-width="12" />
+  <!-- Minimalist 3-bead DAG thread -->
+  <path d="M332 344 C332 508, 512 468, 512 632" stroke="#FAF9F6" stroke-opacity="0.92" stroke-width="46" stroke-linecap="round" />
+  <path d="M692 344 C692 508, 512 468, 512 632" stroke="#FAF9F6" stroke-opacity="0.62" stroke-width="46" stroke-linecap="round" />
+  <circle cx="332" cy="336" r="96" fill="#FAF9F6" />
+  <circle cx="692" cy="336" r="96" fill="#FAF9F6" fill-opacity="0.86" />
+  <circle cx="512" cy="688" r="108" fill="#FAF9F6" />
+  <circle cx="512" cy="688" r="44" fill="#C45D3B" />
+</svg>
