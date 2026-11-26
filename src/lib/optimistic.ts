@@ -86,6 +86,7 @@ export function applyOptimisticUpdate(
       description: patch.description ?? it.description,
       acceptanceCriteria: patch.acceptanceCriteria ?? it.acceptanceCriteria,
       notes: patch.notes ?? it.notes,
+      scope: patch.scope ?? it.scope,
       updatedAt: new Date().toISOString(),
     };
   });

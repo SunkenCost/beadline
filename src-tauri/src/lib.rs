@@ -10,7 +10,7 @@ use crate::engine::workspace_mgr::WorkspaceManager;
 use crate::models::settings::{AppSettings, WindowGeometry};
 use crate::watcher::fs_watcher::FsWatcherManager;
 use std::sync::Arc;
-use tauri::{AppHandle, Manager, PhysicalPosition, PhysicalSize, RunEvent, WindowEvent};
+use tauri::{AppHandle, Emitter, Manager, PhysicalPosition, PhysicalSize, RunEvent, WindowEvent};
 use tokio::sync::Mutex;
 use tracing::{info, warn};
 
@@ -171,6 +171,9 @@ pub fn run() {
                 window.on_window_event(move |event| match event {
                     WindowEvent::Focused(focused) => {
                         set_webview_memory_target(&window_for_events, !focused);
+                        if *focused {
+                            let _ = window_for_events.emit("beadline://window-focused", ());
+                        }
                     }
                     WindowEvent::Moved(_) | WindowEvent::Resized(_) => {
                         if let Some(geo) = capture_window_geometry(&window_for_events) {
@@ -219,6 +222,10 @@ pub fn run() {
             commands::workspaces::update_workspace_config,
             commands::workspaces::init_beads,
             commands::issues::get_snapshot,
+            commands::issues::get_radar_snapshot,
+            commands::issues::clear_session_waiting,
+            commands::issues::release_session,
+            commands::issues::run_workspace_doctor,
             commands::issues::get_all_active,
             commands::issues::get_issue_comments,
             commands::issues::create_issue,
@@ -234,6 +241,7 @@ pub fn run() {
             commands::system::detect_bd_path,
             commands::system::get_bd_status,
             commands::system::install_managed_bd,
+            commands::system::get_bl_status,
         ])
         .build(tauri::generate_context!())
         .expect("error while building Beadline")

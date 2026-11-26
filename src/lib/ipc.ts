@@ -4,14 +4,17 @@ import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import type {
   AppErrorDto,
   AppSettings,
+  BlCliStatus,
   CommentDto,
   CreateIssueRequest,
   CreateIssueResponse,
   CrossProjectActiveItem,
+  DoctorReport,
   GithubSyncResponse,
   ManagedBdStatus,
   ModuleAliasConfig,
   PlatformInfo,
+  RadarSnapshot,
   UpdateIssueRequest,
   WorkspaceListResponse,
   WorkspaceSnapshot,
@@ -60,7 +63,7 @@ export async function ipcUpdateSettings(settings: AppSettings): Promise<AppSetti
 }
 
 export async function ipcGetPlatformInfo(): Promise<PlatformInfo> {
-  if (!isTauriRuntime()) return { os: "web", arch: "browser", version: "0.1.0" };
+  if (!isTauriRuntime()) return { os: "web", arch: "browser", version: "0.2.0" };
   return invoke<PlatformInfo>("get_platform_info");
 }
 
@@ -107,6 +110,31 @@ export async function ipcGetSnapshot(
   force = false,
 ): Promise<WorkspaceSnapshot> {
   return invoke<WorkspaceSnapshot>("get_snapshot", { workspacePath, force });
+}
+
+export async function ipcGetRadarSnapshot(
+  workspacePath: string,
+  scanGit = true,
+): Promise<RadarSnapshot> {
+  return invoke<RadarSnapshot>("get_radar_snapshot", { workspacePath, scanGit });
+}
+
+export async function ipcClearSessionWaiting(
+  workspacePath: string,
+  sessionId: string,
+): Promise<RadarSnapshot> {
+  return invoke<RadarSnapshot>("clear_session_waiting", { workspacePath, sessionId });
+}
+
+export async function ipcReleaseSession(
+  workspacePath: string,
+  sessionId: string,
+): Promise<RadarSnapshot> {
+  return invoke<RadarSnapshot>("release_session", { workspacePath, sessionId });
+}
+
+export async function ipcRunWorkspaceDoctor(workspacePath: string): Promise<DoctorReport> {
+  return invoke<DoctorReport>("run_workspace_doctor", { workspacePath });
 }
 
 export async function ipcGetAllActive(): Promise<CrossProjectActiveItem[]> {
@@ -221,6 +249,13 @@ export async function ipcInstallManagedBd(): Promise<ManagedBdStatus> {
   return invoke<ManagedBdStatus>("install_managed_bd");
 }
 
+export async function ipcGetBlStatus(): Promise<BlCliStatus> {
+  if (!isTauriRuntime()) {
+    return { installed: false, path: null, version: null };
+  }
+  return invoke<BlCliStatus>("get_bl_status");
+}
+
 export async function ipcPickFolder(title: string): Promise<string | null> {
   if (!isTauriRuntime()) return null;
   const res = await openDialog({
@@ -240,11 +275,27 @@ export async function subscribeSnapshotUpdated(
   });
 }
 
+export async function subscribeRadarUpdated(
+  handler: (radar: RadarSnapshot) => void,
+): Promise<UnlistenFn> {
+  if (!isTauriRuntime()) return () => undefined;
+  return listen<RadarSnapshot>("beadline://radar-updated", (ev) => {
+    handler(ev.payload);
+  });
+}
+
 export async function subscribeAllActiveUpdated(
   handler: (items: CrossProjectActiveItem[]) => void,
 ): Promise<UnlistenFn> {
   if (!isTauriRuntime()) return () => undefined;
   return listen<CrossProjectActiveItem[]>("beadline://all-active-updated", (ev) => {
     handler(ev.payload);
+  });
+}
+
+export async function subscribeWindowFocused(handler: () => void): Promise<UnlistenFn> {
+  if (!isTauriRuntime()) return () => undefined;
+  return listen("beadline://window-focused", () => {
+    handler();
   });
 }

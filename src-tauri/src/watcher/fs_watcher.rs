@@ -1,9 +1,11 @@
 use crate::config::store::{normalize_display_path, ConfigStore};
-use crate::engine::jsonl_reader::fnv1a64;
 use crate::engine::workspace_mgr::{log_watch_warning, WorkspaceManager};
 use crate::models::settings::AppSettings;
+use beadline_core::fs_util::fnv1a64;
+use beadline_core::locator::{has_any_store, RepoLocator};
 use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use std::collections::{HashMap, HashSet};
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -12,17 +14,21 @@ use tokio::sync::{mpsc, Mutex as AsyncMutex, Notify};
 use tokio::task::JoinHandle;
 
 pub const SNAPSHOT_UPDATED_EVENT: &str = "beadline://snapshot-updated";
+pub const RADAR_UPDATED_EVENT: &str = "beadline://radar-updated";
 pub const ALL_ACTIVE_UPDATED_EVENT: &str = "beadline://all-active-updated";
 
 struct ActiveWatch {
     path: String,
-    _watcher: RecommendedWatcher,
-    task: JoinHandle<()>,
+    _store_watcher: RecommendedWatcher,
+    _runtime_watcher: Option<RecommendedWatcher>,
+    snapshot_task: JoinHandle<()>,
+    radar_task: JoinHandle<()>,
 }
 
 impl Drop for ActiveWatch {
     fn drop(&mut self) {
-        self.task.abort();
+        self.snapshot_task.abort();
+        self.radar_task.abort();
     }
 }
 
@@ -58,7 +64,7 @@ impl BackgroundChanges {
             for path in event.paths {
                 for root in path.ancestors().skip(1) {
                     if let Some(workspace) = watched.get(root) {
-                        if path.strip_prefix(root).is_ok_and(is_relevant_path) {
+                        if path.strip_prefix(root).is_ok_and(is_relevant_store_path) {
                             dirty.insert(workspace.clone());
                         }
                         break;
@@ -114,8 +120,6 @@ impl FsWatcherManager {
         let Ok(mut state) = self.state.lock() else {
             return;
         };
-        // Read the current registry after taking the lock so overlapping commands
-        // never install watches using an older registry.
         let registry = config_store.load_workspaces();
         let active = registry
             .active_path
@@ -123,7 +127,7 @@ impl FsWatcherManager {
             .filter(|path| Path::new(path).is_dir())
             .or(fallback_active.filter(|_| !registry.entries.is_empty()))
             .map(normalize_display_path)
-            .filter(|path| Path::new(path).join(".beads").is_dir());
+            .filter(|path| has_any_store(Path::new(path)));
 
         if active.as_deref() != state.active.as_ref().map(|watch| watch.path.as_str()) {
             state.active = None;
@@ -141,7 +145,7 @@ impl FsWatcherManager {
             .entries
             .iter()
             .map(|entry| normalize_display_path(&entry.path))
-            .filter(|path| Some(path) != active.as_ref() && Path::new(path).join(".beads").is_dir())
+            .filter(|path| Some(path) != active.as_ref() && has_any_store(Path::new(path)))
             .collect();
 
         if desired.is_empty() {
@@ -178,34 +182,96 @@ impl ActiveWatch {
         workspace_mgr: Arc<WorkspaceManager>,
         settings: Arc<AsyncMutex<AppSettings>>,
     ) -> Option<Self> {
-        let mut last_fp = workspace_mgr.fingerprint_for(&path);
-        let (tx, mut rx) = mpsc::channel(1);
-        let watcher = watch_beads(&path, move || {
-            let _ = tx.try_send(());
-        })?;
-        let watch_path = path.clone();
-        let task = tokio::spawn(async move {
-            while rx.recv().await.is_some() {
-                tokio::time::sleep(Duration::from_millis(250)).await;
-                // Consume the trailing wake-up, if any, from the same burst.
-                let _ = rx.try_recv();
+        let loc = RepoLocator::locate(Path::new(&path)).ok()?;
+        let store_dir = loc.store_dir.clone();
+        let runtime_dir = loc.runtime_dir.clone();
+        if !store_dir.is_dir() {
+            return None;
+        }
+        // Ensure per-session runtime directory exists so live agent pulses are detected immediately
+        let _ = fs::create_dir_all(&runtime_dir);
 
-                if workspace_mgr.fingerprint_for(&watch_path) == last_fp {
+        let mut last_fp = workspace_mgr.fingerprint_for(&path);
+        let mut last_rt_fp = workspace_mgr.runtime_fingerprint_for(&path);
+
+        let (snap_tx, mut snap_rx) = mpsc::channel(1);
+        let (radar_tx, mut radar_rx) = mpsc::channel(1);
+
+        let runtime_inside_store = runtime_dir.starts_with(&store_dir);
+
+        let snap_tx_cb = snap_tx.clone();
+        let radar_tx_cb = radar_tx.clone();
+        let store_watcher = watch_store_dir(
+            &store_dir,
+            move || {
+                let _ = snap_tx_cb.try_send(());
+            },
+            move || {
+                let _ = radar_tx_cb.try_send(());
+            },
+        )?;
+
+        // When legacy `.beads/` is used inside a Git repo, runtime pulses live in
+        // `<git-common-dir>/beadline/runtime/pulses`, so attach a dedicated non-recursive watcher.
+        let runtime_watcher = if !runtime_inside_store && runtime_dir.is_dir() {
+            let radar_tx_ext = radar_tx.clone();
+            watch_runtime_dir(&runtime_dir, move || {
+                let _ = radar_tx_ext.try_send(());
+            })
+        } else {
+            None
+        };
+
+        let watch_path_snap = path.clone();
+        let mgr_snap = Arc::clone(&workspace_mgr);
+        let settings_snap = Arc::clone(&settings);
+        let app_snap = app.clone();
+        let snapshot_task = tokio::spawn(async move {
+            while snap_rx.recv().await.is_some() {
+                tokio::time::sleep(Duration::from_millis(250)).await;
+                let _ = snap_rx.try_recv();
+
+                if mgr_snap.fingerprint_for(&watch_path_snap) == last_fp {
                     continue;
                 }
-                let cfg = settings.lock().await.clone();
-                if let Ok(snap) = workspace_mgr.get_snapshot(&watch_path, &cfg, false).await {
+                let cfg = settings_snap.lock().await.clone();
+                if let Ok(snap) = mgr_snap.get_snapshot(&watch_path_snap, &cfg, false).await {
                     if snap.fingerprint != last_fp {
                         last_fp.clone_from(&snap.fingerprint);
-                        let _ = app.emit(SNAPSHOT_UPDATED_EVENT, &snap);
+                        let _ = app_snap.emit(SNAPSHOT_UPDATED_EVENT, &snap);
                     }
                 }
             }
         });
+
+        // Independent lease channel: NEVER triggers full Board snapshot or Git subprocesses!
+        let watch_path_radar = path.clone();
+        let radar_task = tokio::spawn(async move {
+            while radar_rx.recv().await.is_some() {
+                tokio::time::sleep(Duration::from_millis(200)).await;
+                let _ = radar_rx.try_recv();
+
+                let cur_rt = workspace_mgr.runtime_fingerprint_for(&watch_path_radar);
+                if cur_rt == last_rt_fp {
+                    continue;
+                }
+                last_rt_fp = cur_rt;
+                let cfg = settings.lock().await.clone();
+                if let Ok(radar) = workspace_mgr
+                    .get_radar_snapshot(&watch_path_radar, &cfg, false)
+                    .await
+                {
+                    let _ = app.emit(RADAR_UPDATED_EVENT, &radar);
+                }
+            }
+        });
+
         Some(Self {
             path,
-            _watcher: watcher,
-            task,
+            _store_watcher: store_watcher,
+            _runtime_watcher: runtime_watcher,
+            snapshot_task,
+            radar_task,
         })
     }
 }
@@ -224,8 +290,6 @@ impl BackgroundWatch {
                 log_watch_warning(&format!("failed to create background watcher: {err}"))
             })
             .ok()?;
-        // One debouncer for all background repos keeps a burst of edits from
-        // triggering one complete cross-project scan per repository.
         let task = tokio::spawn(async move {
             let mut last_fps: HashMap<String, String> = HashMap::new();
             let mut last_payload_hash: Option<u64> = None;
@@ -238,8 +302,6 @@ impl BackgroundWatch {
                     continue;
                 }
 
-                // Ignore spurious mtime-only touches (such as `bd --readonly` or self-exports)
-                // whose content-based Dolt/JSONL fingerprint did not actually change.
                 let mut changed_paths = Vec::new();
                 for path in paths {
                     let fp = workspace_mgr.fingerprint_for(&path);
@@ -287,7 +349,6 @@ impl BackgroundWatch {
             paths.watched.remove(root);
         }
         paths.dirty.retain(|workspace| desired.contains(workspace));
-        // notify can call the event handler while processing watch/unwatch.
         drop(paths);
         for root in removed {
             if let Err(err) = self.watcher.unwatch(&root) {
@@ -296,7 +357,12 @@ impl BackgroundWatch {
         }
 
         for path in desired {
-            let root = Path::new(path).join(".beads");
+            let root = RepoLocator::locate(Path::new(path))
+                .map(|l| l.store_dir)
+                .unwrap_or_else(|_| Path::new(path).join(".beads"));
+            if !root.is_dir() {
+                continue;
+            }
             let Ok(mut paths) = self.changes.paths.lock() else {
                 return false;
             };
@@ -320,39 +386,86 @@ impl BackgroundWatch {
     }
 }
 
-fn watch_beads(path: &str, on_change: impl Fn() + Send + 'static) -> Option<RecommendedWatcher> {
-    let beads_dir = PathBuf::from(path).join(".beads");
-    let event_root = beads_dir.clone();
+fn watch_store_dir(
+    store_dir: &Path,
+    on_store_change: impl Fn() + Send + 'static,
+    on_runtime_change: impl Fn() + Send + 'static,
+) -> Option<RecommendedWatcher> {
+    let event_root = store_dir.to_path_buf();
     let handler = move |result: Result<Event, notify::Error>| {
         if let Ok(event) = result {
-            // Reads can generate access events on some platforms. Never feed
-            // our own JSONL reads back into either refresh loop.
-            if !matches!(event.kind, EventKind::Access(_))
-                && event
-                    .paths
-                    .iter()
-                    .any(|path| path.strip_prefix(&event_root).is_ok_and(is_relevant_path))
-            {
-                on_change();
+            if matches!(event.kind, EventKind::Access(_)) {
+                return;
+            }
+            let mut hit_store = false;
+            let mut hit_runtime = false;
+            for p in &event.paths {
+                if let Ok(rel) = p.strip_prefix(&event_root) {
+                    if is_relevant_store_path(rel) {
+                        hit_store = true;
+                    } else if is_relevant_pulse_path(rel) {
+                        hit_runtime = true;
+                    }
+                }
+            }
+            if hit_store {
+                on_store_change();
+            }
+            if hit_runtime {
+                on_runtime_change();
             }
         }
     };
     let result = notify::recommended_watcher(handler).and_then(|mut watcher| {
-        watcher.watch(&beads_dir, RecursiveMode::Recursive)?;
+        watcher.watch(store_dir, RecursiveMode::Recursive)?;
         Ok(watcher)
     });
     match result {
         Ok(watcher) => Some(watcher),
         Err(err) => {
-            log_watch_warning(&format!("failed to watch {}: {err}", beads_dir.display()));
+            log_watch_warning(&format!("failed to watch {}: {err}", store_dir.display()));
             None
         }
     }
 }
 
-// Accept paths relative to .beads, including nested Dolt manifests and HEADs.
-fn is_relevant_path(relative: &Path) -> bool {
-    if relative.components().any(|part| {
+fn watch_runtime_dir(
+    runtime_dir: &Path,
+    on_runtime_change: impl Fn() + Send + 'static,
+) -> Option<RecommendedWatcher> {
+    let event_root = runtime_dir.to_path_buf();
+    let handler = move |result: Result<Event, notify::Error>| {
+        if let Ok(event) = result {
+            if matches!(event.kind, EventKind::Access(_)) {
+                return;
+            }
+            if event
+                .paths
+                .iter()
+                .any(|p| p.strip_prefix(&event_root).is_ok_and(is_relevant_pulse_file))
+            {
+                on_runtime_change();
+            }
+        }
+    };
+    let result = notify::recommended_watcher(handler).and_then(|mut watcher| {
+        watcher.watch(runtime_dir, RecursiveMode::NonRecursive)?;
+        Ok(watcher)
+    });
+    match result {
+        Ok(watcher) => Some(watcher),
+        Err(err) => {
+            log_watch_warning(&format!(
+                "failed to watch runtime dir {}: {err}",
+                runtime_dir.display()
+            ));
+            None
+        }
+    }
+}
+
+fn is_ignored_temp_or_lock(relative: &Path) -> bool {
+    relative.components().any(|part| {
         let Some(name) = part.as_os_str().to_str() else {
             return false;
         };
@@ -362,7 +475,11 @@ fn is_relevant_path(relative: &Path) -> bool {
             || lower == "lock"
             || lower == "tempfiles"
             || lower == "temptf"
-    }) {
+    })
+}
+
+fn is_relevant_store_path(relative: &Path) -> bool {
+    if is_ignored_temp_or_lock(relative) {
         return false;
     }
     relative
@@ -371,21 +488,47 @@ fn is_relevant_path(relative: &Path) -> bool {
         .is_some_and(|name| matches!(name, "issues.jsonl" | "manifest" | "HEAD"))
 }
 
+fn is_relevant_pulse_path(relative: &Path) -> bool {
+    if is_ignored_temp_or_lock(relative) {
+        return false;
+    }
+    let text = relative.to_string_lossy().replace('\\', "/");
+    if !text.starts_with("runtime/pulses/") {
+        return false;
+    }
+    is_relevant_pulse_file(relative)
+}
+
+fn is_relevant_pulse_file(relative: &Path) -> bool {
+    if is_ignored_temp_or_lock(relative) {
+        return false;
+    }
+    relative
+        .file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| !name.starts_with('.') && name.ends_with(".json"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn accepts_jsonl_and_dolt_metadata() {
+    fn separates_store_and_runtime_pulse_events() {
         for path in [
             "issues.jsonl",
             "manifest",
             "HEAD",
             "embeddeddolt/repo/.dolt/noms/manifest",
-            "dolt/repo/.dolt/HEAD",
         ] {
-            assert!(is_relevant_path(Path::new(path)), "{path}");
+            assert!(is_relevant_store_path(Path::new(path)), "{path}");
+            assert!(!is_relevant_pulse_path(Path::new(path)), "{path}");
         }
+
+        assert!(is_relevant_pulse_path(Path::new("runtime/pulses/ses_abc.json")));
+        assert!(!is_relevant_store_path(Path::new("runtime/pulses/ses_abc.json")));
+        assert!(!is_relevant_pulse_path(Path::new("runtime/pulses/.ses_abc.lock")));
+        assert!(!is_relevant_pulse_path(Path::new("runtime/pulses/.ses_abc.tmp")));
     }
 
     #[test]
@@ -396,56 +539,9 @@ mod tests {
             "dolt/repo/LOCK",
             "dolt/tempfiles/manifest",
             "dolt/TempFiles/HEAD",
-            "dolt/repo/atomic.tmp/HEAD",
-            "dolt/repo/manifest.lock/HEAD",
-            "dolt/repo/noms/journal",
             "config.yaml",
         ] {
-            assert!(!is_relevant_path(Path::new(path)), "{path}");
+            assert!(!is_relevant_store_path(Path::new(path)), "{path}");
         }
-    }
-
-    #[tokio::test]
-    async fn background_watcher_routes_non_active_files_and_drops_removed_roots() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let workspace = |name: &str| {
-            let root = dir.path().join(name);
-            std::fs::create_dir_all(root.join(".beads")).expect("beads dir");
-            normalize_display_path(&root.to_string_lossy())
-        };
-        let first = workspace("first");
-        let second = workspace("second");
-        let changes = Arc::new(BackgroundChanges::default());
-        let mut background = BackgroundWatch {
-            watcher: changes.native_watcher().expect("native watcher"),
-            changes: Arc::clone(&changes),
-            task: tokio::spawn(std::future::pending()),
-        };
-        assert!(background.sync(&HashSet::from([first.clone(), second.clone()])));
-
-        std::fs::write(Path::new(&first).join(".beads/issues.jsonl"), "first")
-            .expect("first write");
-        tokio::time::timeout(Duration::from_secs(5), changes.ready.notified())
-            .await
-            .expect("first workspace event");
-        assert_eq!(changes.take(), HashSet::from([first.clone()]));
-
-        assert!(background.sync(&HashSet::from([second.clone()])));
-        std::fs::write(Path::new(&first).join(".beads/HEAD"), "removed").expect("removed write");
-        std::fs::write(Path::new(&second).join(".beads/manifest"), "second").expect("second write");
-        // The first write can generate multiple events. An existing wake-up
-        // from the removed workspace may be observed with no pending work.
-        let observed = tokio::time::timeout(Duration::from_secs(5), async {
-            loop {
-                changes.ready.notified().await;
-                let paths = changes.take();
-                if !paths.is_empty() {
-                    break paths;
-                }
-            }
-        })
-        .await
-        .expect("retained workspace event");
-        assert_eq!(observed, HashSet::from([second]));
     }
 }

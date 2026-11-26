@@ -6,6 +6,7 @@ import {
   Layers,
   List,
   Plus,
+  Radar,
   RefreshCw,
   Search,
   Settings,
@@ -25,6 +26,11 @@ import { BoardView } from "@/components/views/BoardView";
 import { EpicsView } from "@/components/views/EpicsView";
 import { ListView } from "@/components/views/ListView";
 
+const MissionControlView = lazy(() =>
+  import("@/components/views/MissionControlView").then((m) => ({
+    default: m.MissionControlView,
+  })),
+);
 const DagView = lazy(() =>
   import("@/components/views/DagView").then((m) => ({ default: m.DagView })),
 );
@@ -42,6 +48,7 @@ import { isClosedIterationRound } from "@/lib/human-context";
 import { formatIpcError, ipcPickFolder } from "@/lib/ipc";
 import { resolveModule } from "@/lib/modules";
 import { applyThemeToDocument } from "@/lib/theme";
+import { useRadarStore } from "@/stores/useRadarStore";
 import { useSettingsStore } from "@/stores/useSettingsStore";
 import { type ActiveView, useUiStore } from "@/stores/useUiStore";
 import { useWorkspaceStore } from "@/stores/useWorkspaceStore";
@@ -50,8 +57,9 @@ import type { BoardLane, IssueDto } from "@/types/ipc";
 const NAV_ITEMS: readonly {
   id: ActiveView;
   icon: typeof Kanban;
-  labelKey: "board" | "epics" | "dag" | "list";
+  labelKey: "mission" | "board" | "epics" | "dag" | "list";
 }[] = [
+  { id: "mission", icon: Radar, labelKey: "mission" },
   { id: "board", icon: Kanban, labelKey: "board" },
   { id: "epics", icon: Layers, labelKey: "epics" },
   { id: "dag", icon: GitFork, labelKey: "dag" },
@@ -217,18 +225,37 @@ export function App() {
     [moduleScopedIssues],
   );
 
+  const radar = useRadarStore((s) => s.radar);
+  const refreshRadar = useRadarStore((s) => s.refreshRadar);
+  const clearRadar = useRadarStore((s) => s.clearRadar);
+
+  // Keep lightweight radar leases hydrated on workspace switch (no git polling loop)
+  useEffect(() => {
+    if (!activePath || !snapshot?.hasBeads) {
+      clearRadar();
+      return;
+    }
+    void refreshRadar(activePath, activeView === "mission");
+  }, [activePath, snapshot?.hasBeads, activeView, refreshRadar, clearRadar]);
+
   const navCounts = useMemo(() => {
     const ids = new Set(moduleScopedIssues.map((i) => i.id));
     const edgeCount = (snapshot?.edges ?? []).filter(
       (e) => ids.has(e.from) && ids.has(e.to),
     ).length;
+    const missionCount = radar
+      ? radar.attention.length > 0
+        ? radar.attention.length
+        : radar.sessions.length
+      : 0;
     return {
+      mission: missionCount,
       board: moduleScopedIssues.filter((i) => i.issueType !== "epic").length,
       epics: moduleScopedIssues.filter((i) => i.issueType === "epic").length,
       dag: edgeCount,
       list: moduleScopedIssues.length,
     };
-  }, [moduleScopedIssues, snapshot?.edges]);
+  }, [moduleScopedIssues, snapshot?.edges, radar]);
 
   const activeModMeta = activeModule
     ? resolveModule(activeModule, modulePrefix, locale, moduleAliases)
@@ -744,6 +771,10 @@ export function App() {
                   </div>
                 </div>
               </div>
+            ) : activeView === "mission" ? (
+              <Suspense fallback={null}>
+                <MissionControlView />
+              </Suspense>
             ) : activeView === "board" ? (
               <BoardView
                 issues={boardIssues}

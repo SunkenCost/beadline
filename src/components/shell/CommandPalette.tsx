@@ -7,6 +7,7 @@ import {
   Layers,
   List,
   Plus,
+  Radar,
   RefreshCw,
   Search,
   Settings,
@@ -102,6 +103,13 @@ export function CommandPalette() {
         meta: "Ctrl+,",
         icon: "action",
         onRun: () => setSettingsOpen(true),
+      },
+      {
+        id: "v-mission",
+        group: t.palette.groupViews,
+        label: t.nav.mission,
+        meta: "M",
+        onRun: () => setActiveView("mission"),
       },
       {
         id: "v-board",
@@ -278,6 +286,9 @@ export function CommandPalette() {
                     )}
                     {item.id === "act-settings" && (
                       <Settings className="h-3.5 w-3.5 text-[var(--fg-3)]" />
+                    )}
+                    {item.id === "v-mission" && (
+                      <Radar className="h-3.5 w-3.5 text-[var(--accent)]" />
                     )}
                     {item.id === "v-board" && <Kanban className="h-3.5 w-3.5 text-[var(--fg-3)]" />}
                     {item.id === "v-epics" && <Layers className="h-3.5 w-3.5 text-[var(--fg-3)]" />}

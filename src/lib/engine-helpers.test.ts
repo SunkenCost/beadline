@@ -79,10 +79,11 @@ describe("dag-layout, modules, and prompt-builder", () => {
     expect(custom.color).toBe("#123456");
   });
 
-  it("builds a structured agent prompt with blockers and bd close commands", () => {
+  it("builds a structured agent prompt with blockers and protocol instructions", () => {
     const blocker = mockIssue("bl-1", { title: "Core Engine", status: "in_progress" });
     const issue = mockIssue("bl-2", {
       title: "Kanban Board",
+      scope: ["src/components/views/**"],
       openBlockedBy: ["bl-1"],
       smart: {
         githubNumber: 12,
@@ -109,9 +110,19 @@ describe("dag-layout, modules, and prompt-builder", () => {
       edges: [],
     };
     const prompt = buildAgentPrompt(issue, snap, { "bl-1": blocker, "bl-2": issue }, "en");
-    expect(prompt).toContain("Task Brief: bl-2");
+    expect(prompt).toContain("Task Handoff: bl-2");
     expect(prompt).toContain("feat/board");
     expect(prompt).toContain("Core Engine");
-    expect(prompt).toContain("bd close bl-2 --force");
+    expect(prompt).toContain("src/components/views/**");
+    expect(prompt).toContain("bl_claim");
+    expect(prompt).toContain("bl_finish");
+
+    const doltPrompt = buildAgentPrompt(
+      issue,
+      { ...snap, storageBackend: "dolt-cli" },
+      { "bl-1": blocker, "bl-2": issue },
+      "en",
+    );
+    expect(doltPrompt).toContain("bd close bl-2 --force");
   });
 });

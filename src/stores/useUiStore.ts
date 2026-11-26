@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import type { BoardLane } from "@/types/ipc";
 
-export type ActiveView = "all-active" | "board" | "epics" | "dag" | "list";
+export type ActiveView = "mission" | "all-active" | "board" | "epics" | "dag" | "list";
 export type BoardScope = "tasks" | "all";
 export type BoardGroupMode = "flat" | "epic";
 export type DagMode = "connected" | "active" | "all";

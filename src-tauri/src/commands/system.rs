@@ -1,11 +1,15 @@
-use crate::engine::bd_cli::{resolve_bd_binary, resolve_bd_with_source};
+use crate::engine::bd_cli::{configure_no_window, find_in_path, resolve_bd_binary, resolve_bd_with_source};
 use crate::engine::bd_installer::{install_managed_bd as download_managed_bd, probe_bd_version};
 use crate::error::{AppError, AppResult};
-use crate::models::issue::ManagedBdStatus;
+use crate::models::issue::{BlCliStatus, ManagedBdStatus};
 use crate::AppState;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::process::Stdio;
+use std::time::Duration;
 use tauri::{AppHandle, State};
 use tauri_plugin_opener::OpenerExt;
+use tokio::process::Command;
+use tokio::time::timeout;
 
 const BLOCKED_SCHEMES: &[&str] = &["file", "javascript", "data", "vbscript", "ms-msdt", "cmd"];
 
@@ -90,4 +94,82 @@ pub async fn get_bd_status(state: State<'_, AppState>) -> AppResult<ManagedBdSta
 pub async fn install_managed_bd(state: State<'_, AppState>) -> AppResult<ManagedBdStatus> {
     let config_dir = state.config_store.config_dir().to_path_buf();
     download_managed_bd(&config_dir).await
+}
+
+#[tauri::command]
+pub async fn get_bl_status() -> AppResult<BlCliStatus> {
+    let Some(path) = resolve_bl_binary() else {
+        return Ok(BlCliStatus {
+            installed: false,
+            path: None,
+            version: None,
+        });
+    };
+    let version = probe_bl_version(&path).await;
+    let display = beadline_core::fs_util::normalize_display_path(&path.to_string_lossy());
+    Ok(BlCliStatus {
+        installed: true,
+        path: Some(display),
+        version,
+    })
+}
+
+fn resolve_bl_binary() -> Option<PathBuf> {
+    let bin_name = if cfg!(windows) { "bl.exe" } else { "bl" };
+
+    // 1. Sibling binary right next to the running `beadline` executable (release & dev)
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            let sibling = dir.join(bin_name);
+            if sibling.is_file() {
+                return Some(sibling);
+            }
+            // In `target/debug/beadline.exe`, also check `target/release/bl.exe`
+            if let Some(target_root) = dir.parent() {
+                let rel = target_root.join("release").join(bin_name);
+                if rel.is_file() {
+                    return Some(rel);
+                }
+            }
+        }
+    }
+
+    // 2. PATH lookup
+    if let Some(in_path) = find_in_path(bin_name) {
+        return Some(in_path);
+    }
+
+    // 3. Common user bin directories
+    let home = std::env::var_os("USERPROFILE").or_else(|| std::env::var_os("HOME"));
+    if let Some(h) = home {
+        let home_dir = PathBuf::from(h);
+        for rel in [".cargo/bin", ".local/bin", "bin"] {
+            let cand = home_dir.join(rel).join(bin_name);
+            if cand.is_file() {
+                return Some(cand);
+            }
+        }
+    }
+
+    None
+}
+
+async fn probe_bl_version(path: &Path) -> Option<String> {
+    let mut cmd = Command::new(path);
+    cmd.arg("--version")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .kill_on_drop(true);
+    configure_no_window(&mut cmd);
+    let out = timeout(Duration::from_secs(2), cmd.output()).await.ok()?.ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let text = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    if text.is_empty() {
+        None
+    } else {
+        Some(text)
+    }
 }

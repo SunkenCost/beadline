@@ -1,3 +1,4 @@
+use beadline_core::error::CoreError;
 use serde::Serialize;
 
 #[derive(Debug, thiserror::Error)]
@@ -29,11 +30,33 @@ pub enum AppError {
     #[error("invalid operation: {0}")]
     InvalidOperation(String),
 
+    #[error("resource busy: {0}")]
+    Busy(String),
+
+    #[error("stale revision: {0}")]
+    StaleRevision(String),
+
     #[error("managed bd installation failed: {0}")]
     InstallFailed(String),
 
     #[error("internal error: {0}")]
     Internal(String),
+}
+
+impl From<CoreError> for AppError {
+    fn from(err: CoreError) -> Self {
+        match err {
+            CoreError::WorkspaceNotFound(p) => Self::WorkspaceNotFound(p),
+            CoreError::NotInitialized => Self::BeadsNotInitialized,
+            CoreError::NotFound(m) | CoreError::InvalidOperation(m) | CoreError::WorkspaceMismatch(m) => {
+                Self::InvalidOperation(m)
+            }
+            CoreError::Busy(m) => Self::Busy(m),
+            CoreError::StaleRevision { .. } => Self::StaleRevision(err.to_string()),
+            CoreError::SessionExpired(m) => Self::InvalidOperation(m),
+            CoreError::Io(m) | CoreError::Internal(m) => Self::Internal(m),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -56,6 +79,8 @@ impl AppError {
             Self::DisallowedScheme(_) => "DISALLOWED_SCHEME",
             Self::ConfigIo(_) => "CONFIG_IO",
             Self::InvalidOperation(_) => "INVALID_OPERATION",
+            Self::Busy(_) => "BUSY",
+            Self::StaleRevision(_) => "STALE_REV",
             Self::InstallFailed(_) => "INSTALL_FAILED",
             Self::Internal(_) => "INTERNAL",
         }

@@ -1,4 +1,5 @@
 import {
+  AlertTriangle,
   Check,
   CheckCircle2,
   Copy,
@@ -6,17 +7,26 @@ import {
   Download,
   Monitor,
   Moon,
+  Plug,
   RotateCcw,
+  Stethoscope,
   Sun,
   Trash2,
   Upload,
 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Button } from "@/components/ui/Button";
 import { Dialog } from "@/components/ui/Dialog";
 import { Switch } from "@/components/ui/Switch";
 import { useT } from "@/i18n";
-import { formatIpcError, ipcGetBdStatus, ipcInstallManagedBd } from "@/lib/ipc";
+import {
+  formatIpcError,
+  ipcGetBdStatus,
+  ipcGetBlStatus,
+  ipcInstallManagedBd,
+  ipcRunWorkspaceDoctor,
+} from "@/lib/ipc";
+import { buildHarnessSnippets, type HarnessId } from "@/lib/mcp-snippets";
 import { resolveModule } from "@/lib/modules";
 import { exportCurrentThemeJson, isSafeCssColor, parseThemeJson } from "@/lib/theme";
 import { useSettingsStore } from "@/stores/useSettingsStore";
@@ -24,7 +34,9 @@ import { useUiStore } from "@/stores/useUiStore";
 import { useWorkspaceStore } from "@/stores/useWorkspaceStore";
 import type {
   AppearanceMode,
+  BlCliStatus,
   DensityMode,
+  DoctorReport,
   ManagedBdStatus,
   ModuleAliasConfig,
   RadiusScale,
@@ -51,7 +63,7 @@ const MODULE_COLORS = [
   "#94A3B8",
 ] as const;
 
-type SettingsTab = "appearance" | "general";
+type SettingsTab = "appearance" | "general" | "ai-setup";
 
 export function SettingsModal() {
   const t = useT();
@@ -81,6 +93,10 @@ export function SettingsModal() {
   const [tab, setTab] = useState<SettingsTab>("appearance");
   const [bdPathDraft, setBdPathDraft] = useState(settings.bdPath ?? "");
   const [bdStatus, setBdStatus] = useState<ManagedBdStatus | null>(null);
+  const [blStatus, setBlStatus] = useState<BlCliStatus | null>(null);
+  const [doctorReport, setDoctorReport] = useState<DoctorReport | null>(null);
+  const [doctorBusy, setDoctorBusy] = useState(false);
+  const [selectedHarness, setSelectedHarness] = useState<HarnessId>("claude-code");
   const [installingBd, setInstallingBd] = useState(false);
   const [schemesDraft, setSchemesDraft] = useState(settings.deepLinkSchemes.join(", "));
   const [modPrefixDraft, setModPrefixDraft] = useState(currentWs?.modulePrefix ?? "mod:");
@@ -101,7 +117,30 @@ export function SettingsModal() {
     void ipcGetBdStatus()
       .then((st) => setBdStatus(st))
       .catch(() => setBdStatus({ installed: false, path: null, source: null, version: null }));
+    void ipcGetBlStatus()
+      .then((st) => setBlStatus(st))
+      .catch(() => setBlStatus({ installed: false, path: null, version: null }));
+    setDoctorReport(null);
   }, [open, activePath, settings.bdPath, settings.deepLinkSchemes]);
+
+  const harnessSnippets = useMemo(
+    () => buildHarnessSnippets(blStatus?.path ?? null, activePath),
+    [blStatus?.path, activePath],
+  );
+  const activeSnippet = harnessSnippets.find((s) => s.id === selectedHarness) ?? harnessSnippets[0];
+
+  const handleRunDoctor = async () => {
+    if (!activePath) return;
+    setDoctorBusy(true);
+    try {
+      const rep = await ipcRunWorkspaceDoctor(activePath);
+      setDoctorReport(rep);
+    } catch (err) {
+      showNotice("err", formatIpcError(err));
+    } finally {
+      setDoctorBusy(false);
+    }
+  };
 
   const showNotice = (kind: "ok" | "err", text: string) => {
     setStatusMsg({ kind, text });
@@ -230,6 +269,18 @@ export function SettingsModal() {
           }`}
         >
           {t.settings.tabGeneral}
+        </button>
+        <button
+          type="button"
+          onClick={() => setTab("ai-setup")}
+          className={`inline-flex h-7 items-center gap-1.5 rounded-[var(--radius-xs)] px-3 text-[12px] transition-colors cursor-pointer ${
+            tab === "ai-setup"
+              ? "bg-[var(--surface)] font-medium text-[var(--fg)] shadow-[var(--shadow-xs)]"
+              : "text-[var(--fg-2)] hover:text-[var(--fg)]"
+          }`}
+        >
+          <Plug className="h-3 w-3 text-[var(--accent)]" />
+          <span>{t.settings.tabAiSetup}</span>
         </button>
       </div>
 
@@ -453,6 +504,122 @@ export function SettingsModal() {
               </Button>
             </div>
           </section>
+        </div>
+      ) : tab === "ai-setup" ? (
+        <div className="flex flex-col gap-4">
+          {/* bl Binary Detection & Workspace Doctor */}
+          <div className="space-y-2.5 rounded-[var(--radius-md)] border border-[var(--border)] bg-[var(--surface-subtle)] px-3.5 py-3">
+            <div className="flex items-center justify-between gap-2">
+              <div className="min-w-0 flex-1">
+                <div className="flex items-center gap-1.5 text-[12px] font-medium text-[var(--fg)]">
+                  {blStatus?.installed ? (
+                    <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-[var(--success)]" />
+                  ) : (
+                    <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-[var(--warning)]" />
+                  )}
+                  <span>
+                    {t.settings.blStatusLabel} ·{" "}
+                    {blStatus?.installed ? t.settings.blDetected : t.settings.blMissing}
+                  </span>
+                </div>
+                <div className="mt-0.5 truncate font-mono-tabular text-[10.5px] text-[var(--fg-3)]">
+                  {blStatus?.installed
+                    ? `${blStatus.version ? `${blStatus.version} · ` : ""}${blStatus.path ?? ""}`
+                    : t.settings.blMissingHint}
+                </div>
+              </div>
+              {activePath && (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={doctorBusy}
+                  onClick={() => void handleRunDoctor()}
+                >
+                  <Stethoscope className="h-3 w-3" />
+                  <span>{t.settings.doctorBtn}</span>
+                </Button>
+              )}
+            </div>
+
+            {doctorReport && (
+              <div className="space-y-1 border-t border-[var(--border-subtle)] pt-2 text-[11px]">
+                <div
+                  className={`font-medium ${
+                    doctorReport.ok ? "text-[var(--success)]" : "text-[var(--warning)]"
+                  }`}
+                >
+                  {doctorReport.ok ? t.settings.doctorOk : t.settings.doctorWarn}
+                </div>
+                <div className="font-mono-tabular text-[10.5px] text-[var(--fg-2)]">
+                  store: {doctorReport.storeDir} ({doctorReport.issueCount} issues ·{" "}
+                  {doctorReport.activeSessions} active sessions)
+                </div>
+                {doctorReport.warnings.map((w) => (
+                  <div key={w} className="text-[var(--warning)]">
+                    · {w}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Harness MCP & CLI Snippets */}
+          <div className="space-y-2.5">
+            <div>
+              <div className="text-[12.5px] font-medium text-[var(--fg)]">
+                {t.settings.mcpSnippetsTitle}
+              </div>
+              <div className="mt-0.5 text-[11.5px] text-[var(--fg-3)]">
+                {t.settings.mcpSnippetsDesc}
+              </div>
+            </div>
+
+            <div className="flex flex-wrap gap-1.5">
+              {harnessSnippets.map((item) => (
+                <button
+                  key={item.id}
+                  type="button"
+                  onClick={() => setSelectedHarness(item.id)}
+                  className={`h-7 rounded-[var(--radius-xs)] border px-2.5 text-[11.5px] transition-colors cursor-pointer ${
+                    selectedHarness === item.id
+                      ? "border-[var(--accent)] bg-[var(--accent-soft)] font-medium text-[var(--fg)]"
+                      : "border-[var(--border)] bg-[var(--surface-subtle)] text-[var(--fg-2)] hover:text-[var(--fg)]"
+                  }`}
+                >
+                  {item.name}
+                </button>
+              ))}
+            </div>
+
+            {activeSnippet && (
+              <div className="space-y-2 rounded-[var(--radius-md)] border border-[var(--border)] bg-[var(--surface-subtle)] p-3">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="font-mono-tabular text-[11px] text-[var(--fg-3)]">
+                    {activeSnippet.targetFile}
+                  </span>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => {
+                      void navigator.clipboard?.writeText(activeSnippet.code);
+                      showNotice("ok", t.settings.copiedConfig);
+                    }}
+                  >
+                    <Copy className="h-3 w-3" />
+                    <span>{t.settings.copyConfig}</span>
+                  </Button>
+                </div>
+                <pre className="overflow-x-auto rounded-[var(--radius-sm)] border border-[var(--border-subtle)] bg-[var(--surface)] p-2.5 font-mono-tabular text-[11px] leading-relaxed text-[var(--fg)] select-text">
+                  {activeSnippet.code}
+                </pre>
+                {activeSnippet.id === "t3-cli" && (
+                  <p className="text-[11px] leading-relaxed text-[var(--fg-3)]">
+                    {t.settings.t3Note}
+                  </p>
+                )}
+              </div>
+            )}
+          </div>
         </div>
       ) : (
         <div className="flex flex-col gap-4">

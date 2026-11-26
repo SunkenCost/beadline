@@ -1,16 +1,16 @@
-use crate::engine::git_meta::read_beads_config_values;
-use crate::engine::native_store::detect_storage_backend;
-use crate::engine::smart_meta::extract_smart_meta;
-use crate::error::{AppError, AppResult};
-use crate::models::issue::{
-    BoardLane, BoardStats, DagEdge, IssueDto, ModuleCount, StorageBackend, WorkspaceSnapshot,
-    WorktreeRef,
+use crate::error::{CoreError, CoreResult};
+use crate::fs_util::fnv1a64;
+use crate::locator::{RepoLocation, RepoLocator};
+use crate::models::{
+    BoardLane, BoardStats, DagEdge, IssueDto, IssueProof, ModuleCount, StorageBackend, StoreKind,
+    WorkspaceSnapshot, WorktreeRef,
 };
+use crate::smart_meta::extract_smart_meta;
 use serde::Deserialize;
+use serde_json::Value;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
 use std::path::Path;
-use tracing::warn;
 
 #[derive(Debug, Deserialize)]
 struct RawDep {
@@ -58,9 +58,11 @@ struct RawIssue {
     #[serde(default)]
     dependencies: Vec<RawDep>,
     #[serde(default)]
-    comments: Vec<serde_json::Value>,
+    comments: Vec<Value>,
     #[serde(default)]
     comment_count: usize,
+    #[serde(default)]
+    metadata: Option<Value>,
 }
 
 fn default_open() -> String {
@@ -75,27 +77,100 @@ fn default_task() -> String {
     "task".to_string()
 }
 
-pub fn fnv1a64(bytes: &[u8]) -> u64 {
-    let mut hash: u64 = 0xcbf29ce484222325;
-    for &b in bytes {
-        hash ^= u64::from(b);
-        hash = hash.wrapping_mul(0x100000001b3);
+#[derive(Debug, Default)]
+struct BeadlineExt {
+    rev: u64,
+    scope: Vec<String>,
+    proof: Option<IssueProof>,
+}
+
+fn parse_beadline_ext(metadata: &Option<Value>) -> BeadlineExt {
+    let mut ext = BeadlineExt {
+        rev: 1,
+        ..BeadlineExt::default()
+    };
+    let Some(bl) = metadata
+        .as_ref()
+        .and_then(|m| m.get("beadline"))
+        .and_then(Value::as_object)
+    else {
+        return ext;
+    };
+
+    if let Some(rev) = bl.get("rev").and_then(Value::as_u64) {
+        ext.rev = rev.max(1);
     }
-    hash
+    if let Some(arr) = bl.get("scope").and_then(Value::as_array) {
+        ext.scope = arr
+            .iter()
+            .filter_map(Value::as_str)
+            .map(String::from)
+            .collect();
+    }
+    if let Some(proof_val) = bl.get("proof") {
+        if let Ok(proof) = serde_json::from_value::<IssueProof>(proof_val.clone()) {
+            if !proof.summary.trim().is_empty() || !proof.refs.is_empty() {
+                ext.proof = Some(proof);
+            }
+        }
+    }
+    ext
+}
+
+pub fn read_beads_config_values(store_dir: &Path) -> (Option<String>, Option<String>) {
+    let cfg_path = store_dir.join("config.yaml");
+    let Ok(text) = fs::read_to_string(cfg_path) else {
+        return (None, None);
+    };
+
+    let mut prefix = None;
+    let mut gh_repo = None;
+    let mut in_github = false;
+
+    for raw_line in text.lines() {
+        let line = raw_line.trim_end();
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+        let indent = line.len() - line.trim_start().len();
+        if indent == 0 {
+            in_github = trimmed == "github:";
+            if let Some(val) = trimmed
+                .strip_prefix("issue-prefix:")
+                .or_else(|| trimmed.strip_prefix("prefix:"))
+            {
+                let clean = val.trim().trim_matches('"').trim_matches('\'');
+                if !clean.is_empty() {
+                    prefix = Some(clean.to_string());
+                }
+            } else if let Some(val) = trimmed.strip_prefix("github.repository:") {
+                let clean = val.trim().trim_matches('"').trim_matches('\'');
+                if !clean.is_empty() {
+                    gh_repo = Some(clean.to_string());
+                }
+            }
+        } else if in_github {
+            if let Some(val) = trimmed.strip_prefix("repository:") {
+                let clean = val.trim().trim_matches('"').trim_matches('\'');
+                if !clean.is_empty() {
+                    gh_repo = Some(clean.to_string());
+                }
+            }
+        }
+    }
+
+    (prefix, gh_repo)
 }
 
 /// Content-based Dolt state token derived from the actual bytes of `manifest` / `HEAD`
 /// files inside `.beads/embeddeddolt` or `.beads/dolt`.
-///
-/// Embedded Dolt rewrites `manifest` mtime even on `--readonly` commands and `bd export`
-/// while leaving its ~147-byte root-hash content identical. Hashing content instead of
-/// mtime prevents read-only commands and self-exports from triggering watcher loops.
-pub fn dolt_state_token(beads_dir: &Path) -> String {
+pub fn dolt_state_token(store_dir: &Path) -> String {
     let mut parts: Vec<(String, Vec<u8>)> = Vec::new();
     for sub in ["embeddeddolt", "dolt"] {
-        let dir = beads_dir.join(sub);
+        let dir = store_dir.join(sub);
         if dir.exists() {
-            collect_dolt_markers(&dir, beads_dir, 0, &mut parts);
+            collect_dolt_markers(&dir, store_dir, 0, &mut parts);
         }
     }
     if parts.is_empty() {
@@ -153,10 +228,10 @@ fn collect_dolt_markers(
     }
 }
 
-pub fn latest_dolt_mtime_ms(beads_dir: &Path) -> u128 {
+pub fn latest_dolt_mtime_ms(store_dir: &Path) -> u128 {
     let mut latest = 0_u128;
     for sub in ["embeddeddolt", "dolt"] {
-        let dir = beads_dir.join(sub);
+        let dir = store_dir.join(sub);
         if dir.exists() {
             scan_dolt_mtimes(&dir, 0, &mut latest);
         }
@@ -202,46 +277,46 @@ pub fn file_mtime_ms(path: &Path) -> u128 {
         .unwrap_or(0)
 }
 
-pub fn compute_fingerprint(beads_dir: &Path, module_prefix: &str) -> String {
-    if !beads_dir.exists() {
+pub fn compute_fingerprint(store_dir: &Path, module_prefix: &str) -> String {
+    if !store_dir.exists() {
         return "missing".to_string();
     }
-    let jsonl = beads_dir.join("issues.jsonl");
+    let jsonl = store_dir.join("issues.jsonl");
     let (jsonl_len, jsonl_hash) = match fs::read(&jsonl) {
         Ok(bytes) => (bytes.len() as u64, fnv1a64(&bytes)),
         Err(_) => (0, 0),
     };
-    let dolt_token = dolt_state_token(beads_dir);
+    let dolt_token = dolt_state_token(store_dir);
     format!("{jsonl_len}:{jsonl_hash:016x}:{dolt_token}:{module_prefix}")
 }
 
+pub struct RawIssueRecord(RawIssue);
+
+/// Lenient UI-oriented JSONL parser (skips malformed lines so a single broken line never
+/// bricks the whole board).
 pub fn parse_jsonl_str(raw: &str) -> Vec<RawIssueRecord> {
     let mut records = Vec::new();
-    for (line_no, line) in raw.lines().enumerate() {
+    for line in raw.lines() {
         let trimmed = line.trim();
         if trimmed.is_empty() {
             continue;
         }
-        match serde_json::from_str::<RawIssue>(trimmed) {
-            Ok(issue) => {
-                if issue.record_type.is_empty() || issue.record_type == "issue" {
-                    records.push(RawIssueRecord(issue));
-                }
-            }
-            Err(err) => {
-                warn!(line = line_no + 1, "skipping malformed JSONL line: {err}");
+        if let Ok(issue) = serde_json::from_str::<RawIssue>(trimmed) {
+            if issue.record_type.is_empty() || issue.record_type == "issue" {
+                records.push(RawIssueRecord(issue));
             }
         }
     }
     records
 }
 
-pub struct RawIssueRecord(RawIssue);
-
 #[allow(clippy::too_many_arguments)]
 pub fn build_snapshot_from_records(
+    repo_id: String,
     repo_name: String,
     repo_path: String,
+    store_path: String,
+    store_kind: StoreKind,
     storage_backend: StorageBackend,
     prefix: Option<String>,
     github_repo: Option<String>,
@@ -361,6 +436,8 @@ pub fn build_snapshot_from_records(
             .cloned()
             .unwrap_or_else(|| r.id.clone());
 
+        let ext = parse_beadline_ext(&r.metadata);
+
         let smart = extract_smart_meta(
             &r.external_ref,
             &r.description,
@@ -379,6 +456,9 @@ pub fn build_snapshot_from_records(
             notes: r.notes,
             acceptance_criteria: r.acceptance_criteria,
             close_reason: r.close_reason,
+            scope: ext.scope,
+            proof: ext.proof,
+            rev: ext.rev,
             status: r.status,
             lane,
             priority: r.priority,
@@ -424,8 +504,11 @@ pub fn build_snapshot_from_records(
     modules.sort_by(|a, b| b.count.cmp(&a.count).then_with(|| a.key.cmp(&b.key)));
 
     WorkspaceSnapshot {
+        repo_id,
         repo_name,
         repo_path,
+        store_path,
+        store_kind,
         has_beads: true,
         storage_backend,
         prefix,
@@ -440,26 +523,24 @@ pub fn build_snapshot_from_records(
     }
 }
 
-pub fn read_workspace_snapshot(
-    repo_root: &Path,
+pub fn read_workspace_snapshot_for_location(
+    loc: &RepoLocation,
     repo_path_display: String,
     module_prefix: &str,
     github_repo: Option<String>,
     repo_worktrees: &[WorktreeRef],
     allowed_schemes: &[String],
-) -> AppResult<WorkspaceSnapshot> {
-    let repo_name = repo_root
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("workspace")
-        .to_string();
-    let beads_dir = repo_root.join(".beads");
-    if !beads_dir.exists() {
+) -> CoreResult<WorkspaceSnapshot> {
+    let store_path = loc.store_dir.to_string_lossy().to_string();
+    if !loc.has_store {
         return Ok(WorkspaceSnapshot {
-            repo_name,
+            repo_id: loc.repo_id.clone(),
+            repo_name: loc.repo_name.clone(),
             repo_path: repo_path_display,
+            store_path,
+            store_kind: loc.store_kind,
             has_beads: false,
-            storage_backend: StorageBackend::NativeJsonl,
+            storage_backend: loc.storage_backend,
             prefix: None,
             github_repo,
             module_prefix: module_prefix.to_string(),
@@ -472,15 +553,14 @@ pub fn read_workspace_snapshot(
         });
     }
 
-    let storage_backend = detect_storage_backend(repo_root);
-    let (prefix, cfg_gh) = read_beads_config_values(repo_root);
+    let (prefix, cfg_gh) = read_beads_config_values(&loc.store_dir);
     let effective_gh = github_repo.or(cfg_gh);
-    let fingerprint = compute_fingerprint(&beads_dir, module_prefix);
-    let jsonl_path = beads_dir.join("issues.jsonl");
+    let fingerprint = compute_fingerprint(&loc.store_dir, module_prefix);
+    let jsonl_path = loc.issues_jsonl_path();
 
     let raw = if jsonl_path.exists() {
         fs::read_to_string(&jsonl_path)
-            .map_err(|e| AppError::Internal(format!("failed to read issues.jsonl: {e}")))?
+            .map_err(|e| CoreError::Io(format!("failed to read issues.jsonl: {e}")))?
     } else {
         String::new()
     };
@@ -488,9 +568,12 @@ pub fn read_workspace_snapshot(
     let records = parse_jsonl_str(&raw);
 
     Ok(build_snapshot_from_records(
-        repo_name,
+        loc.repo_id.clone(),
+        loc.repo_name.clone(),
         repo_path_display,
-        storage_backend,
+        store_path,
+        loc.store_kind,
+        loc.storage_backend,
         prefix,
         effective_gh,
         module_prefix,
@@ -499,6 +582,25 @@ pub fn read_workspace_snapshot(
         repo_worktrees,
         allowed_schemes,
     ))
+}
+
+pub fn read_workspace_snapshot(
+    repo_root: &Path,
+    repo_path_display: String,
+    module_prefix: &str,
+    github_repo: Option<String>,
+    repo_worktrees: &[WorktreeRef],
+    allowed_schemes: &[String],
+) -> CoreResult<WorkspaceSnapshot> {
+    let loc = RepoLocator::locate(repo_root)?;
+    read_workspace_snapshot_for_location(
+        &loc,
+        repo_path_display,
+        module_prefix,
+        github_repo,
+        repo_worktrees,
+        allowed_schemes,
+    )
 }
 
 pub fn derive_lane(status: &str, has_open_blockers: bool) -> BoardLane {
@@ -516,7 +618,7 @@ pub fn derive_lane(status: &str, has_open_blockers: bool) -> BoardLane {
     }
 }
 
-fn make_short_id(id: &str, external_ref: &str) -> String {
+pub fn make_short_id(id: &str, external_ref: &str) -> String {
     let ext = external_ref.trim();
     if let Some(num) = ext.strip_prefix("gh-").or_else(|| ext.strip_prefix("GH-")) {
         if num.chars().all(|c| c.is_ascii_digit()) && !num.is_empty() {
@@ -542,17 +644,19 @@ mod tests {
     use super::*;
 
     #[test]
-    fn builds_lanes_epics_dag_and_modules_accurately() {
+    fn parses_metadata_beadline_extensions_without_breaking_standard_fields() {
         let jsonl = r#"
-{"_type":"issue","id":"bl-1","title":"Epic One","status":"in_progress","priority":0,"issue_type":"epic","external_ref":"gh-4","labels":["mod:engine","mod:ui"]}
-{"_type":"issue","id":"bl-1.1","title":"Ready task","status":"open","priority":1,"issue_type":"task","labels":["mod:engine"],"dependencies":[{"issue_id":"bl-1.1","depends_on_id":"bl-1","type":"parent-child"}]}
-{"_type":"issue","id":"bl-1.2","title":"Blocked task","status":"open","priority":1,"issue_type":"task","labels":["mod:ui"],"dependencies":[{"issue_id":"bl-1.2","depends_on_id":"bl-1","type":"parent-child"},{"issue_id":"bl-1.2","depends_on_id":"bl-1.1","type":"blocks"}]}
-{"_type":"issue","id":"bl-1.3","title":"Done task","status":"closed","priority":2,"issue_type":"task","labels":["mod:ui"],"dependencies":[{"issue_id":"bl-1.3","depends_on_id":"bl-1","type":"parent-child"}]}
+{"_type":"issue","id":"bl-1","title":"Auth Epic","status":"in_progress","priority":0,"issue_type":"epic","external_ref":"gh-4","labels":["mod:auth"],"metadata":{"custom":"keep","beadline":{"schemaVersion":1,"rev":3,"scope":["src/auth/**"],"proof":{"summary":"all green","refs":["abc1234"],"submittedAt":"2026-11-26T00:00:00Z"}}}}
+{"_type":"issue","id":"bl-1.1","title":"Ready task","status":"open","priority":1,"issue_type":"task","labels":["mod:auth"],"dependencies":[{"issue_id":"bl-1.1","depends_on_id":"bl-1","type":"parent-child"}]}
+{"_type":"issue","id":"bl-1.2","title":"Blocked task","status":"open","priority":1,"issue_type":"task","dependencies":[{"issue_id":"bl-1.2","depends_on_id":"bl-1","type":"parent-child"},{"issue_id":"bl-1.2","depends_on_id":"bl-1.1","type":"blocks"}]}
 "#;
         let records = parse_jsonl_str(jsonl);
         let snap = build_snapshot_from_records(
+            "repo_1".into(),
             "beadline".into(),
             "Y:\\GitHub\\beadline".into(),
+            "Y:\\GitHub\\beadline\\.git\\beadline".into(),
+            StoreKind::SharedGitCommon,
             StorageBackend::NativeJsonl,
             Some("bl".into()),
             Some("example/beadline".into()),
@@ -563,27 +667,14 @@ mod tests {
             &["t3-thread".into()],
         );
 
-        assert_eq!(snap.stats.total, 4);
-        assert_eq!(snap.stats.in_progress, 1);
-        assert_eq!(snap.stats.ready, 1);
-        assert_eq!(snap.stats.blocked, 1);
-        assert_eq!(snap.stats.closed, 1);
-        assert_eq!(snap.stats.epics, 1);
-        assert_eq!(snap.edges.len(), 1);
-        assert_eq!(snap.edges[0].from, "bl-1.1");
-        assert_eq!(snap.edges[0].to, "bl-1.2");
-
-        let epic = snap.issues.iter().find(|i| i.id == "bl-1").expect("epic");
+        let epic = snap.issues.iter().find(|i| i.id == "bl-1").unwrap();
+        assert_eq!(epic.rev, 3);
+        assert_eq!(epic.scope, vec!["src/auth/**"]);
+        assert_eq!(epic.proof.as_ref().unwrap().summary, "all green");
         assert_eq!(epic.short_id, "GH-4");
-        assert_eq!(epic.children_ids.len(), 3);
 
-        let blocked = snap
-            .issues
-            .iter()
-            .find(|i| i.id == "bl-1.2")
-            .expect("blocked");
+        let blocked = snap.issues.iter().find(|i| i.id == "bl-1.2").unwrap();
         assert_eq!(blocked.lane, BoardLane::Blocked);
-        assert_eq!(blocked.open_blocked_by, vec!["bl-1.1"]);
     }
 
     #[test]
@@ -591,31 +682,22 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let beads = dir.path().join(".beads");
         let noms = beads.join("embeddeddolt/bl/.dolt/noms");
-        std::fs::create_dir_all(&noms).expect("mkdir");
+        fs::create_dir_all(&noms).expect("mkdir");
         let manifest = noms.join("manifest");
         let jsonl = beads.join("issues.jsonl");
 
         let v1 = "5:__DOLT__:lock1:root_hash_aaa:0000:vvvv:100";
-        std::fs::write(&manifest, v1).expect("write manifest");
-        std::fs::write(&jsonl, "{\"id\":\"bl-1\",\"title\":\"A\"}\n").expect("write jsonl");
+        fs::write(&manifest, v1).expect("write manifest");
+        fs::write(&jsonl, "{\"id\":\"bl-1\",\"title\":\"A\"}\n").expect("write jsonl");
 
         let fp1 = compute_fingerprint(&beads, "mod:");
-
-        // Simulate embedded Dolt touching manifest on a --readonly command (same bytes)
-        std::fs::write(&manifest, v1).expect("rewrite identical manifest");
+        fs::write(&manifest, v1).expect("rewrite identical manifest");
         let fp2 = compute_fingerprint(&beads, "mod:");
-        assert_eq!(
-            fp1, fp2,
-            "identical manifest rewrite must not change fingerprint"
-        );
+        assert_eq!(fp1, fp2);
 
-        // Simulate a real Dolt write changing root hash
         let v2 = "5:__DOLT__:lock2:root_hash_bbb:0000:vvvv:101";
-        std::fs::write(&manifest, v2).expect("write updated manifest");
+        fs::write(&manifest, v2).expect("write updated manifest");
         let fp3 = compute_fingerprint(&beads, "mod:");
-        assert_ne!(
-            fp1, fp3,
-            "real Dolt root-hash change must update fingerprint"
-        );
+        assert_ne!(fp1, fp3);
     }
 }

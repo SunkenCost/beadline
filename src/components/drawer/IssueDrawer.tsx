@@ -1,5 +1,7 @@
 import {
+  Bot,
   Check,
+  CheckCircle2,
   Copy,
   ExternalLink,
   FolderOpen,
@@ -19,6 +21,7 @@ import { extractPlainSummary } from "@/lib/human-context";
 import { formatIpcError, ipcGetIssueComments, ipcOpenExternalLink, ipcRevealPath } from "@/lib/ipc";
 import { resolveModule } from "@/lib/modules";
 import { buildAgentPrompt } from "@/lib/prompt-builder";
+import { useRadarStore } from "@/stores/useRadarStore";
 import { useSettingsStore } from "@/stores/useSettingsStore";
 import { useUiStore } from "@/stores/useUiStore";
 import { useWorkspaceStore } from "@/stores/useWorkspaceStore";
@@ -58,14 +61,20 @@ export function IssueDrawer({ modulePrefix, moduleAliases, onRequestClose }: Iss
   const removeDependency = useWorkspaceStore((s) => s.removeDependency);
   const addComment = useWorkspaceStore((s) => s.addComment);
 
+  const sessionsByIssueId = useRadarStore((s) => s.sessionsByIssueId);
+  const clearSessionWaiting = useRadarStore((s) => s.clearSessionWaiting);
+  const releaseSession = useRadarStore((s) => s.releaseSession);
+
   const issue = selectedIssueId ? (byId[selectedIssueId] ?? null) : null;
   const issueId = issue?.id ?? null;
+  const boundSessions = issueId ? (sessionsByIssueId[issueId] ?? []) : [];
   const issueUpdatedAt = issue?.updatedAt ?? "";
   const issueCommentCount = issue?.commentCount ?? 0;
 
   const [titleDraft, setTitleDraft] = useState("");
   const [assigneeDraft, setAssigneeDraft] = useState("");
   const [labelsDraft, setLabelsDraft] = useState("");
+  const [scopeDraft, setScopeDraft] = useState("");
   const [editingTexts, setEditingTexts] = useState(false);
   const [descDraft, setDescDraft] = useState("");
   const [accDraft, setAccDraft] = useState("");
@@ -95,6 +104,7 @@ export function IssueDrawer({ modulePrefix, moduleAliases, onRequestClose }: Iss
     setTitleDraft(current.title);
     setAssigneeDraft(current.assignee);
     setLabelsDraft(current.labels.filter((l) => !l.startsWith(prefix)).join(", "));
+    setScopeDraft((current.scope ?? []).join(", "));
     setDescDraft(current.description);
     setAccDraft(current.acceptanceCriteria);
     setNotesDraft(current.notes);
@@ -299,6 +309,78 @@ export function IssueDrawer({ modulePrefix, moduleAliases, onRequestClose }: Iss
             }}
             className="-mx-1.5 w-[calc(100%+12px)] rounded-[var(--radius-sm)] border border-transparent px-1.5 py-1 text-[16px] font-semibold text-[var(--fg)] focus:border-[var(--border-strong)] focus:bg-[var(--surface-subtle)]"
           />
+
+          {/* Active Agent Sessions bound to this issue */}
+          {boundSessions.length > 0 && (
+            <div className="space-y-2 rounded-[var(--radius-md)] border border-[var(--accent-border)] bg-[var(--accent-soft)]/35 px-3.5 py-2.5">
+              <div className="flex items-center gap-1.5 text-[11px] font-semibold text-[var(--fg-2)]">
+                <Bot className="h-3.5 w-3.5 text-[var(--accent)]" />
+                <span>
+                  {t.drawer.activeSessions} ({boundSessions.length})
+                </span>
+              </div>
+              <div className="space-y-1.5">
+                {boundSessions.map((s) => (
+                  <div
+                    key={s.sessionId}
+                    className="rounded-[var(--radius-sm)] border border-[var(--border)] bg-[var(--surface)] px-2.5 py-2 text-[11.5px]"
+                  >
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <span
+                        className={`h-1.5 w-1.5 rounded-full ${
+                          s.staleHeartbeat
+                            ? "bg-[var(--fg-3)]"
+                            : s.state === "waiting_human"
+                              ? "bg-[var(--warning)]"
+                              : "bg-[var(--success)]"
+                        }`}
+                      />
+                      <span className="font-mono-tabular font-medium text-[var(--fg)]">
+                        {s.harness}
+                      </span>
+                      {s.branch && (
+                        <span className="font-mono-tabular text-[10.5px] text-[var(--fg-3)]">
+                          {s.branch}
+                        </span>
+                      )}
+                      {s.state === "waiting_human" && (
+                        <span className="rounded-[var(--radius-xs)] bg-[var(--accent-soft)] px-1.5 py-0.5 text-[10.5px] font-medium text-[var(--accent)]">
+                          {t.drawer.waitingHumanBadge}
+                        </span>
+                      )}
+                      <div className="ml-auto flex items-center gap-1">
+                        {s.state === "waiting_human" && activePath && (
+                          <Button
+                            size="sm"
+                            variant="primary"
+                            onClick={() => void clearSessionWaiting(activePath, s.sessionId)}
+                          >
+                            {t.drawer.clearWaiting}
+                          </Button>
+                        )}
+                        {activePath && (
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            onClick={() => void releaseSession(activePath, s.sessionId)}
+                          >
+                            {t.drawer.releaseSession}
+                          </Button>
+                        )}
+                      </div>
+                    </div>
+                    {(s.waitingReason || s.summary) && (
+                      <div className="mt-1 text-[11.5px] text-[var(--fg-2)]">
+                        {s.state === "waiting_human" && s.waitingReason
+                          ? s.waitingReason
+                          : s.summary}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
 
           {/* Human-readable Context & Purpose Card — immediately answers "what is this task for?" */}
           {(parentIssue || promoteCloseReason) && (
@@ -517,6 +599,28 @@ export function IssueDrawer({ modulePrefix, moduleAliases, onRequestClose }: Iss
                 className="h-7 rounded-[var(--radius-xs)] border border-[var(--border)] bg-[var(--surface)] px-2 font-mono-tabular text-[12px] text-[var(--fg)]"
               />
             </div>
+
+            {snapshot.storageBackend === "native-jsonl" && (
+              <div className="col-span-2 flex flex-col gap-1">
+                <span className="text-[11px] font-medium text-[var(--fg-3)]">{t.drawer.scope}</span>
+                <input
+                  type="text"
+                  value={scopeDraft}
+                  onChange={(e) => setScopeDraft(e.target.value)}
+                  onBlur={() => {
+                    const nextScope = scopeDraft
+                      .split(",")
+                      .map((s) => s.trim())
+                      .filter(Boolean);
+                    if (nextScope.join(",") !== (issue.scope ?? []).join(",")) {
+                      void patch({ issueId: issue.id, scope: nextScope }, t.settings.savedHint);
+                    }
+                  }}
+                  placeholder={t.drawer.scopePlaceholder}
+                  className="h-7 rounded-[var(--radius-xs)] border border-[var(--border)] bg-[var(--surface)] px-2 font-mono-tabular text-[12px] text-[var(--fg)]"
+                />
+              </div>
+            )}
 
             <div className="col-span-2 flex flex-col gap-1.5">
               <span className="text-[11px] font-medium text-[var(--fg-3)]">{t.drawer.modules}</span>
@@ -763,7 +867,29 @@ export function IssueDrawer({ modulePrefix, moduleAliases, onRequestClose }: Iss
                   </>
                 )}
 
-                {issue.closeReason.trim() && !promoteCloseReason && (
+                {issue.proof && (
+                  <div className="rounded-[var(--radius-sm)] border border-[var(--success)]/30 bg-[var(--success-soft)]/40 p-2.5">
+                    <div className="mb-1 flex items-center gap-1.5 text-[11px] font-semibold text-[var(--success)]">
+                      <CheckCircle2 className="h-3.5 w-3.5" />
+                      <span>{t.drawer.proof}</span>
+                    </div>
+                    <MiniMarkdown content={issue.proof.summary} tone="success" />
+                    {issue.proof.refs.length > 0 && (
+                      <div className="mt-1.5 flex flex-wrap gap-1 font-mono-tabular text-[10.5px] text-[var(--fg-2)]">
+                        {issue.proof.refs.map((r) => (
+                          <span
+                            key={r}
+                            className="rounded-[var(--radius-xs)] border border-[var(--border)] bg-[var(--surface)] px-1.5 py-0.5"
+                          >
+                            {r}
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {issue.closeReason.trim() && !promoteCloseReason && !issue.proof && (
                   <>
                     <div className="text-[11.5px] font-semibold text-[var(--fg-3)]">
                       {t.drawer.closeReason}

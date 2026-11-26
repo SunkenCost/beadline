@@ -1,0 +1,20 @@
+[package]
+name = "beadline-cli"
+version = "0.2.0"
+description = "Ultra-fast local task engine CLI (bl) and native MCP server (bl mcp) for AI coding harnesses"
+authors = ["Beadline Contributors"]
+license = "MIT"
+edition = "2021"
+rust-version = "1.89"
+
+[[bin]]
+name = "bl"
+path = "src/main.rs"
+
+[dependencies]
+beadline-core = { path = "../beadline-core" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[dev-dependencies]
+tempfile = "3"

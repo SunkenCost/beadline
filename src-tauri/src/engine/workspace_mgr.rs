@@ -1,30 +1,36 @@
 use crate::config::store::{normalize_display_path, paths_equal, ConfigStore};
 use crate::engine::bd_cli::{fetch_gh_auth_token, resolve_bd_binary, run_bd};
 use crate::engine::git_meta::{detect_github_repo, list_git_worktrees, read_beads_config_values};
-use crate::engine::jsonl_reader::{
-    compute_fingerprint, dolt_state_token, file_mtime_ms, latest_dolt_mtime_ms,
-    read_workspace_snapshot,
-};
-use crate::engine::native_store::{
-    add_comment_native, close_issue_native, create_issue_native, detect_storage_backend,
-    init_native_workspace, mutate_dependency_native, read_inline_comments, reopen_issue_native,
-    update_issue_native,
-};
 use crate::error::{AppError, AppResult};
 use crate::models::issue::{
-    BoardLane, CommentDto, CreateIssueRequest, CreateIssueResponse, GithubSyncResponse,
-    StorageBackend, UpdateIssueRequest, WorkspaceSnapshot, WorktreeRef,
+    BoardLane, CommentDto, CreateIssueRequest, CreateIssueResponse, DoctorReport,
+    GithubSyncResponse, RadarSnapshot, StorageBackend, UpdateIssueRequest, WorkspaceSnapshot,
+    WorktreeRef,
 };
 use crate::models::settings::AppSettings;
 use crate::models::workspace::{
     CrossProjectActiveItem, ModuleAliasConfig, WorkspaceEntry, WorkspaceListResponse,
     WorkspaceSummary,
 };
+use beadline_core::git_radar::{compute_radar_snapshot, ObservedWorktree};
+use beadline_core::jsonl_reader::{
+    compute_fingerprint, dolt_state_token, file_mtime_ms, latest_dolt_mtime_ms,
+    read_workspace_snapshot_for_location,
+};
+use beadline_core::locator::{has_any_store, RepoLocator};
+use beadline_core::native_store::{
+    add_comment_native, close_issue_native, create_issue_native, derive_prefix,
+    detect_storage_backend, init_native_workspace, mutate_dependency_native, read_inline_comments,
+    reopen_issue_native, run_doctor as core_run_doctor, update_issue_native,
+};
+use beadline_core::runtime_store::{
+    clear_waiting_human as core_clear_waiting_human, release_session_lease, runtime_fingerprint,
+};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
 use std::future::Future;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
@@ -48,6 +54,11 @@ struct ExportRecord {
     last_failed: bool,
 }
 
+struct CachedRadar {
+    observed_worktrees: Vec<ObservedWorktree>,
+    last_snapshot: RadarSnapshot,
+}
+
 struct DiscoveredWorkspace {
     name: String,
     path: String,
@@ -64,6 +75,10 @@ pub struct WorkspaceManager {
     export_in_flight: Mutex<HashMap<String, Arc<AtomicBool>>>,
     export_records: Mutex<HashMap<String, ExportRecord>>,
     git_metadata: Mutex<HashMap<String, GitMetadataSlot>>,
+    /// Single global serialized Git scan worker lock (prevents parallel Git subprocess storms).
+    git_scan_lock: Arc<Mutex<()>>,
+    radar_cache: Mutex<HashMap<String, CachedRadar>>,
+    radar_gen: AtomicU64,
 }
 
 impl WorkspaceManager {
@@ -74,6 +89,9 @@ impl WorkspaceManager {
             export_in_flight: Mutex::new(HashMap::new()),
             export_records: Mutex::new(HashMap::new()),
             git_metadata: Mutex::new(HashMap::new()),
+            git_scan_lock: Arc::new(Mutex::new(())),
+            radar_cache: Mutex::new(HashMap::new()),
+            radar_gen: AtomicU64::new(1),
         }
     }
 
@@ -118,7 +136,7 @@ impl WorkspaceManager {
                 .to_string();
             found.push(DiscoveredWorkspace {
                 name,
-                has_beads: root.join(".beads").is_dir(),
+                has_beads: has_any_store(root),
                 path: norm,
                 is_registered: true,
                 pinned: entry.pinned,
@@ -143,8 +161,8 @@ impl WorkspaceManager {
                 if !p.is_dir() {
                     continue;
                 }
-                let has_beads = p.join(".beads").is_dir();
                 let has_git = p.join(".git").exists();
+                let has_beads = p.join(".beads").is_dir() || (has_git && has_any_store(&p));
                 if !has_beads && !has_git {
                     continue;
                 }
@@ -234,8 +252,8 @@ impl WorkspaceManager {
             .and_then(|n| n.to_str())
             .unwrap_or("workspace")
             .to_string();
-        let has_beads = root.join(".beads").is_dir();
-        if !has_beads {
+
+        let Ok(loc) = RepoLocator::locate(root) else {
             return WorkspaceSummary {
                 name,
                 path: norm_path,
@@ -249,12 +267,27 @@ impl WorkspaceManager {
                 module_prefix: module_prefix.to_string(),
                 module_aliases,
             };
+        };
+
+        if !loc.has_store {
+            return WorkspaceSummary {
+                name,
+                path: norm_path,
+                has_beads: false,
+                storage_backend: loc.storage_backend,
+                prefix: None,
+                issue_count: 0,
+                in_progress_count: 0,
+                is_registered,
+                pinned,
+                module_prefix: module_prefix.to_string(),
+                module_aliases,
+            };
         }
 
-        let storage_backend = detect_storage_backend(root);
         let (prefix, _) = read_beads_config_values(root);
-        let snap = read_workspace_snapshot(
-            root,
+        let snap = read_workspace_snapshot_for_location(
+            &loc,
             norm_path.clone(),
             module_prefix,
             None,
@@ -270,7 +303,7 @@ impl WorkspaceManager {
             name,
             path: norm_path,
             has_beads: true,
-            storage_backend,
+            storage_backend: loc.storage_backend,
             prefix,
             issue_count,
             in_progress_count,
@@ -301,17 +334,20 @@ impl WorkspaceManager {
             .map(|e| e.module_prefix.clone())
             .unwrap_or_else(|| "mod:".to_string());
 
-        let beads_dir = root.join(".beads");
-        if beads_dir.is_dir() && detect_storage_backend(&root) == StorageBackend::DoltCli {
-            let jsonl = beads_dir.join("issues.jsonl");
+        let loc_root = root.clone();
+        let loc = tokio::task::spawn_blocking(move || RepoLocator::locate(&loc_root))
+            .await
+            .map_err(|e| AppError::Internal(format!("locator task join error: {e}")))??;
+
+        if loc.has_store && loc.storage_backend == StorageBackend::DoltCli {
+            let beads_dir = loc.store_dir.clone();
+            let jsonl = loc.issues_jsonl_path();
             if !jsonl.exists() || force_export {
-                // Blocking quick export when JSONL does not exist yet or user explicitly requested force refresh
                 let _ = self.export_jsonl_locked(&root, &norm, settings).await;
             } else if self
                 .should_background_export(&norm, &beads_dir, &jsonl)
                 .await
             {
-                // Coalesced non-blocking background export so UI stays <25ms
                 self.schedule_background_export(root.clone(), norm.clone(), settings.clone())
                     .await;
             }
@@ -323,14 +359,157 @@ impl WorkspaceManager {
             })
             .await;
 
-        read_workspace_snapshot(
-            &root,
-            norm,
-            &module_prefix,
-            gh_repo,
-            &worktrees,
-            &settings.deep_link_schemes,
-        )
+        let schemes = settings.deep_link_schemes.clone();
+        tokio::task::spawn_blocking(move || {
+            read_workspace_snapshot_for_location(
+                &loc,
+                norm,
+                &module_prefix,
+                gh_repo,
+                &worktrees,
+                &schemes,
+            )
+        })
+        .await
+        .map_err(|e| AppError::Internal(format!("snapshot join error: {e}")))?
+        .map_err(Into::into)
+    }
+
+    /// Computes or updates the independent `RadarSnapshot` (sessions, worktrees, conflicts,
+    /// root blockers, attention queue, and scan coverage).
+    ///
+    /// When `scan_git` is false (e.g. on live lease heartbeat events), reuses cached Git
+    /// worktree observations with ZERO Git subprocesses!
+    pub async fn get_radar_snapshot(
+        self: &Arc<Self>,
+        workspace_path: &str,
+        settings: &AppSettings,
+        scan_git: bool,
+    ) -> AppResult<RadarSnapshot> {
+        let norm = normalize_display_path(workspace_path);
+        let root = PathBuf::from(&norm);
+        if !root.is_dir() {
+            return Err(AppError::WorkspaceNotFound(norm));
+        }
+
+        let store_data = self.config_store.load_workspaces();
+        let module_prefix = store_data
+            .entries
+            .iter()
+            .find(|e| paths_equal(&e.path, &norm))
+            .map(|e| e.module_prefix.clone())
+            .unwrap_or_else(|| "mod:".to_string());
+
+        let loc_root = root.clone();
+        let loc = tokio::task::spawn_blocking(move || RepoLocator::locate(&loc_root))
+            .await
+            .map_err(|e| AppError::Internal(format!("locator join error: {e}")))??;
+
+        let cache_key = loc.repo_id.clone();
+        let prev_observed = {
+            let cache = self.radar_cache.lock().await;
+            cache.get(&cache_key).map(|c| c.observed_worktrees.clone())
+        };
+
+        let effective_scan_git = scan_git || prev_observed.is_none();
+        let generation = self.radar_gen.fetch_add(1, Ordering::Relaxed);
+        let schemes = settings.deep_link_schemes.clone();
+        let display = norm.clone();
+
+        // Serialize Git scans through one global worker lock to prevent subprocess storms
+        let _git_guard = if effective_scan_git {
+            Some(self.git_scan_lock.lock().await)
+        } else {
+            None
+        };
+
+        let (radar, observed) = tokio::task::spawn_blocking(move || {
+            let issues = if loc.has_store {
+                read_workspace_snapshot_for_location(
+                    &loc,
+                    display,
+                    &module_prefix,
+                    None,
+                    &[],
+                    &schemes,
+                )
+                .map(|s| s.issues)
+                .unwrap_or_default()
+            } else {
+                Vec::new()
+            };
+            compute_radar_snapshot(
+                &loc,
+                &issues,
+                generation,
+                effective_scan_git,
+                prev_observed.as_deref(),
+            )
+        })
+        .await
+        .map_err(|e| AppError::Internal(format!("radar compute join error: {e}")))?;
+
+        {
+            let mut cache = self.radar_cache.lock().await;
+            cache.insert(
+                cache_key,
+                CachedRadar {
+                    observed_worktrees: observed,
+                    last_snapshot: radar.clone(),
+                },
+            );
+        }
+
+        Ok(radar)
+    }
+
+    pub async fn clear_session_waiting(
+        self: &Arc<Self>,
+        workspace_path: &str,
+        session_id: &str,
+        settings: &AppSettings,
+    ) -> AppResult<RadarSnapshot> {
+        let norm = normalize_display_path(workspace_path);
+        let root = PathBuf::from(&norm);
+        let sid = session_id.to_string();
+        tokio::task::spawn_blocking(move || -> AppResult<()> {
+            let loc = RepoLocator::locate(&root)?;
+            let _ = core_clear_waiting_human(&loc.runtime_dir, &sid)?;
+            Ok(())
+        })
+        .await
+        .map_err(|e| AppError::Internal(format!("clear waiting join error: {e}")))??;
+
+        self.get_radar_snapshot(&norm, settings, false).await
+    }
+
+    pub async fn release_session(
+        self: &Arc<Self>,
+        workspace_path: &str,
+        session_id: &str,
+        settings: &AppSettings,
+    ) -> AppResult<RadarSnapshot> {
+        let norm = normalize_display_path(workspace_path);
+        let root = PathBuf::from(&norm);
+        let sid = session_id.to_string();
+        tokio::task::spawn_blocking(move || -> AppResult<()> {
+            let loc = RepoLocator::locate(&root)?;
+            let _ = release_session_lease(&loc.runtime_dir, &sid)?;
+            Ok(())
+        })
+        .await
+        .map_err(|e| AppError::Internal(format!("release session join error: {e}")))??;
+
+        self.get_radar_snapshot(&norm, settings, false).await
+    }
+
+    pub async fn run_doctor(&self, workspace_path: &str) -> AppResult<DoctorReport> {
+        let norm = normalize_display_path(workspace_path);
+        let root = PathBuf::from(&norm);
+        tokio::task::spawn_blocking(move || core_run_doctor(&root, env!("CARGO_PKG_VERSION")))
+            .await
+            .map_err(|e| AppError::Internal(format!("doctor join error: {e}")))?
+            .map_err(Into::into)
     }
 
     async fn cached_git_metadata<F, Fut>(
@@ -347,7 +526,6 @@ impl WorkspaceManager {
             let mut cache = self.git_metadata.lock().await;
             Arc::clone(cache.entry(normalized_path.to_lowercase()).or_default())
         };
-        // Only serialize refreshes of the same workspace, not Git reads in other repos.
         let mut entry = slot.lock().await;
         if let Some(cached) = entry
             .as_ref()
@@ -407,8 +585,6 @@ impl WorkspaceManager {
 
         let records = self.export_records.lock().await;
         if let Some(rec) = records.get(&key) {
-            // Embedded Dolt rewrites manifest mtime even on --readonly reads and bd export;
-            // if the Dolt root-hash token already matches our last export, skip completely.
             if rec.exported_dolt_token == dolt_token {
                 return false;
             }
@@ -533,21 +709,23 @@ impl WorkspaceManager {
         let mut results = Vec::new();
 
         for ws in discovered.into_iter().filter(|w| w.has_beads) {
-            if let Ok(snap) = read_workspace_snapshot(
-                Path::new(&ws.path),
-                ws.path.clone(),
-                &ws.module_prefix,
-                None,
-                &[],
-                &settings.deep_link_schemes,
-            ) {
-                for issue in snap.issues {
-                    if issue.lane == BoardLane::InProgress && issue.issue_type != "epic" {
-                        results.push(CrossProjectActiveItem {
-                            workspace_name: ws.name.clone(),
-                            workspace_path: ws.path.clone(),
-                            issue,
-                        });
+            if let Ok(loc) = RepoLocator::locate(Path::new(&ws.path)) {
+                if let Ok(snap) = read_workspace_snapshot_for_location(
+                    &loc,
+                    ws.path.clone(),
+                    &ws.module_prefix,
+                    None,
+                    &[],
+                    &settings.deep_link_schemes,
+                ) {
+                    for issue in snap.issues {
+                        if issue.lane == BoardLane::InProgress && issue.issue_type != "epic" {
+                            results.push(CrossProjectActiveItem {
+                                workspace_name: ws.name.clone(),
+                                workspace_path: ws.path.clone(),
+                                issue,
+                            });
+                        }
                     }
                 }
             }
@@ -610,7 +788,11 @@ impl WorkspaceManager {
                 self.export_jsonl_already_locked(&bd_bin, &root, &norm)
                     .await;
             } else {
-                init_native_workspace(&root, &slug)?;
+                let r = root.clone();
+                let s = slug.clone();
+                tokio::task::spawn_blocking(move || init_native_workspace(&r, &s))
+                    .await
+                    .map_err(|e| AppError::Internal(format!("init join error: {e}")))??;
             }
         }
 
@@ -629,7 +811,12 @@ impl WorkspaceManager {
         let root = PathBuf::from(&norm);
 
         if detect_storage_backend(&root) == StorageBackend::NativeJsonl {
-            return read_inline_comments(&root, issue_id);
+            let r = root.clone();
+            let iid = issue_id.to_string();
+            return tokio::task::spawn_blocking(move || read_inline_comments(&r, &iid))
+                .await
+                .map_err(|e| AppError::Internal(format!("comments join error: {e}")))?
+                .map_err(Into::into);
         }
 
         if let Ok(inline) = read_inline_comments(&root, issue_id) {
@@ -639,8 +826,6 @@ impl WorkspaceManager {
         }
 
         let bd_bin = self.resolve_bd(settings)?;
-        // Serialize against bd export on the same workspace so embedded Dolt never
-        // collides on its exclusive store lock.
         let lock = self.lock_for(&norm).await;
         let _guard = lock.lock().await;
         let args = vec![
@@ -706,9 +891,15 @@ impl WorkspaceManager {
         let created_id = {
             let _guard = lock.lock().await;
             if backend == StorageBackend::NativeJsonl {
-                let (cfg_prefix, _) = read_beads_config_values(&root);
-                let prefix = cfg_prefix.unwrap_or_else(|| derive_prefix(&root));
-                create_issue_native(&root, &req, &prefix)?
+                let r = root.clone();
+                let req_clone = req.clone();
+                tokio::task::spawn_blocking(move || {
+                    let (cfg_prefix, _) = read_beads_config_values(&r);
+                    let prefix = cfg_prefix.unwrap_or_else(|| derive_prefix(&r));
+                    create_issue_native(&r, &req_clone, &prefix)
+                })
+                .await
+                .map_err(|e| AppError::Internal(format!("create join error: {e}")))??
             } else {
                 let bd_bin = self.resolve_bd(settings)?;
                 let mut args = vec![
@@ -835,7 +1026,11 @@ impl WorkspaceManager {
         {
             let _guard = lock.lock().await;
             if backend == StorageBackend::NativeJsonl {
-                update_issue_native(&root, &req)?;
+                let r = root.clone();
+                let req_clone = req.clone();
+                tokio::task::spawn_blocking(move || update_issue_native(&r, &req_clone))
+                    .await
+                    .map_err(|e| AppError::Internal(format!("update join error: {e}")))??;
             } else {
                 let bd_bin = self.resolve_bd(settings)?;
                 let mut args = vec!["update".into(), req.issue_id.clone()];
@@ -899,7 +1094,12 @@ impl WorkspaceManager {
         {
             let _guard = lock.lock().await;
             if backend == StorageBackend::NativeJsonl {
-                close_issue_native(&root, issue_id, reason.as_deref())?;
+                let r = root.clone();
+                let iid = issue_id.to_string();
+                let rsn = reason.clone();
+                tokio::task::spawn_blocking(move || close_issue_native(&r, &iid, rsn.as_deref()))
+                    .await
+                    .map_err(|e| AppError::Internal(format!("close join error: {e}")))??;
             } else {
                 let bd_bin = self.resolve_bd(settings)?;
                 let mut args = vec!["close".into(), issue_id.to_string()];
@@ -934,7 +1134,12 @@ impl WorkspaceManager {
         {
             let _guard = lock.lock().await;
             if backend == StorageBackend::NativeJsonl {
-                reopen_issue_native(&root, issue_id, reason.as_deref())?;
+                let r = root.clone();
+                let iid = issue_id.to_string();
+                let rsn = reason.clone();
+                tokio::task::spawn_blocking(move || reopen_issue_native(&r, &iid, rsn.as_deref()))
+                    .await
+                    .map_err(|e| AppError::Internal(format!("reopen join error: {e}")))??;
             } else {
                 let bd_bin = self.resolve_bd(settings)?;
                 let mut args = vec!["reopen".into(), issue_id.to_string()];
@@ -979,7 +1184,12 @@ impl WorkspaceManager {
         {
             let _guard = lock.lock().await;
             if backend == StorageBackend::NativeJsonl {
-                mutate_dependency_native(&root, blocked_id, blocker_id, add)?;
+                let r = root.clone();
+                let b1 = blocked_id.to_string();
+                let b2 = blocker_id.to_string();
+                tokio::task::spawn_blocking(move || mutate_dependency_native(&r, &b1, &b2, add))
+                    .await
+                    .map_err(|e| AppError::Internal(format!("dep join error: {e}")))??;
             } else {
                 let bd_bin = self.resolve_bd(settings)?;
                 let args = vec![
@@ -1012,7 +1222,12 @@ impl WorkspaceManager {
         {
             let _guard = lock.lock().await;
             if backend == StorageBackend::NativeJsonl {
-                add_comment_native(&root, issue_id, text)?;
+                let r = root.clone();
+                let iid = issue_id.to_string();
+                let txt = text.to_string();
+                tokio::task::spawn_blocking(move || add_comment_native(&r, &iid, &txt))
+                    .await
+                    .map_err(|e| AppError::Internal(format!("comment join error: {e}")))??;
             } else {
                 let bd_bin = self.resolve_bd(settings)?;
                 let args = vec![
@@ -1040,7 +1255,8 @@ impl WorkspaceManager {
         let root = PathBuf::from(&norm);
         if detect_storage_backend(&root) != StorageBackend::DoltCli {
             return Err(AppError::InvalidOperation(
-                "GitHub sync requires a Dolt-backed workspace with bd CLI installed".into(),
+                "GitHub sync is a legacy Dolt (bd) command and is disabled in native shared mode"
+                    .into(),
             ));
         }
         let bd_bin = self.resolve_bd(settings)?;
@@ -1093,23 +1309,25 @@ impl WorkspaceManager {
             .find(|e| paths_equal(&e.path, &norm))
             .map(|e| e.module_prefix.as_str())
             .unwrap_or("mod:");
-        compute_fingerprint(&PathBuf::from(&norm).join(".beads"), module_prefix)
+        let store_dir = RepoLocator::locate(Path::new(&norm))
+            .map(|l| l.store_dir)
+            .unwrap_or_else(|_| PathBuf::from(&norm).join(".beads"));
+        compute_fingerprint(&store_dir, module_prefix)
     }
-}
 
-fn derive_prefix(root: &Path) -> String {
-    let raw = root
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("bd")
-        .to_lowercase();
-    let alpha: String = raw.chars().filter(|c| c.is_ascii_alphanumeric()).collect();
-    if alpha.len() >= 3 {
-        alpha[..3].to_string()
-    } else if !alpha.is_empty() {
-        alpha
-    } else {
-        "bd".to_string()
+    pub fn runtime_fingerprint_for(&self, workspace_path: &str) -> String {
+        let norm = normalize_display_path(workspace_path);
+        let rt_dir = RepoLocator::locate(Path::new(&norm))
+            .map(|l| l.runtime_dir)
+            .unwrap_or_else(|_| PathBuf::from(&norm).join(".beads/runtime/pulses"));
+        runtime_fingerprint(&rt_dir)
+    }
+
+    pub fn cached_radar_snapshot(&self, repo_id: &str) -> Option<RadarSnapshot> {
+        self.radar_cache
+            .try_lock()
+            .ok()
+            .and_then(|c| c.get(repo_id).map(|r| r.last_snapshot.clone()))
     }
 }
 
@@ -1203,12 +1421,8 @@ mod tests {
         std::fs::write(&manifest, "5:__DOLT__:lock1:root_v1:0000:vvvv:1").expect("write manifest");
 
         let ws_str = ws.to_string_lossy().to_string();
-        assert!(
-            mgr.should_background_export(&ws_str, &beads, &jsonl).await,
-            "fresh Dolt write newer than JSONL should trigger export"
-        );
+        assert!(mgr.should_background_export(&ws_str, &beads, &jsonl).await);
 
-        // Simulate successful export recording current Dolt token
         let token = dolt_state_token(&beads);
         mgr.export_records.lock().await.insert(
             ws_str.to_lowercase(),
@@ -1218,13 +1432,8 @@ mod tests {
                 last_failed: false,
             },
         );
-        // Even if manifest mtime is newer (e.g. bd --readonly touched it), identical token skips export
-        assert!(
-            !mgr.should_background_export(&ws_str, &beads, &jsonl).await,
-            "identical Dolt token must suppress re-export"
-        );
+        assert!(!mgr.should_background_export(&ws_str, &beads, &jsonl).await);
 
-        // Simulate failed export on a new Dolt token -> backoff suppresses immediate retry
         std::fs::write(&manifest, "5:__DOLT__:lock2:root_v2:0000:vvvv:2")
             .expect("write manifest 2");
         mgr.export_records.lock().await.insert(
@@ -1235,10 +1444,7 @@ mod tests {
                 last_failed: true,
             },
         );
-        assert!(
-            !mgr.should_background_export(&ws_str, &beads, &jsonl).await,
-            "recent export failure must enforce backoff"
-        );
+        assert!(!mgr.should_background_export(&ws_str, &beads, &jsonl).await);
     }
 
     #[tokio::test]
@@ -1249,7 +1455,6 @@ mod tests {
         std::fs::create_dir_all(&repo).expect("mkdir");
         let repo_str = repo.to_string_lossy().to_string();
 
-        // Force invalid explicit bd_path to prove native mode never invokes bd
         let settings = AppSettings {
             bd_path: Some("/nonexistent/bd".into()),
             ..Default::default()
@@ -1276,6 +1481,7 @@ mod tests {
                     description: Some("Created with zero external bd".into()),
                     acceptance_criteria: None,
                     notes: None,
+                    scope: vec!["src/ui/**".into()],
                     blocked_by: vec![],
                 },
                 &settings,

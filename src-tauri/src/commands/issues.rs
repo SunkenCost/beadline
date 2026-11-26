@@ -1,6 +1,7 @@
 use crate::error::AppResult;
 use crate::models::issue::{
-    CommentDto, CreateIssueRequest, CreateIssueResponse, UpdateIssueRequest, WorkspaceSnapshot,
+    CommentDto, CreateIssueRequest, CreateIssueResponse, DoctorReport, RadarSnapshot,
+    UpdateIssueRequest, WorkspaceSnapshot,
 };
 use crate::models::workspace::CrossProjectActiveItem;
 use crate::AppState;
@@ -20,6 +21,53 @@ pub async fn get_snapshot(
         .await?;
     state.sync_workspace_watchers(&app, Some(&snap.repo_path));
     Ok(snap)
+}
+
+#[tauri::command]
+pub async fn get_radar_snapshot(
+    state: State<'_, AppState>,
+    workspace_path: String,
+    scan_git: Option<bool>,
+) -> AppResult<RadarSnapshot> {
+    let settings = state.settings.lock().await.clone();
+    state
+        .workspace_mgr
+        .get_radar_snapshot(&workspace_path, &settings, scan_git.unwrap_or(true))
+        .await
+}
+
+#[tauri::command]
+pub async fn clear_session_waiting(
+    state: State<'_, AppState>,
+    workspace_path: String,
+    session_id: String,
+) -> AppResult<RadarSnapshot> {
+    let settings = state.settings.lock().await.clone();
+    state
+        .workspace_mgr
+        .clear_session_waiting(&workspace_path, &session_id, &settings)
+        .await
+}
+
+#[tauri::command]
+pub async fn release_session(
+    state: State<'_, AppState>,
+    workspace_path: String,
+    session_id: String,
+) -> AppResult<RadarSnapshot> {
+    let settings = state.settings.lock().await.clone();
+    state
+        .workspace_mgr
+        .release_session(&workspace_path, &session_id, &settings)
+        .await
+}
+
+#[tauri::command]
+pub async fn run_workspace_doctor(
+    state: State<'_, AppState>,
+    workspace_path: String,
+) -> AppResult<DoctorReport> {
+    state.workspace_mgr.run_doctor(&workspace_path).await
 }
 
 #[tauri::command]

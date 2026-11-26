@@ -4,6 +4,7 @@ import { AssigneeDot, ModuleInlineList, PriorityGlyph, StatusRing } from "@/comp
 import { useT } from "@/i18n";
 import { extractPlainSummary, isClosedIterationRound, shortParentLabel } from "@/lib/human-context";
 import { formatIpcError } from "@/lib/ipc";
+import { useRadarStore } from "@/stores/useRadarStore";
 import { useSettingsStore } from "@/stores/useSettingsStore";
 import { useUiStore } from "@/stores/useUiStore";
 import { useWorkspaceStore } from "@/stores/useWorkspaceStore";
@@ -22,6 +23,7 @@ export function BoardView({ issues, modulePrefix, moduleAliases, onRequestClose 
   const t = useT();
   const locale = useSettingsStore((s) => s.settings.language);
   const { byId, updateIssue } = useWorkspaceStore();
+  const badgeByIssueId = useRadarStore((s) => s.badgeByIssueId);
   const { boardGroupMode, hideClosedRounds, setHideClosedRounds, openDrawer, pushToast } =
     useUiStore();
   const [dragId, setDragId] = useState<string | null>(null);
@@ -59,7 +61,9 @@ export function BoardView({ issues, modulePrefix, moduleAliases, onRequestClose 
       showParent && it.parentId && it.parentTitle && it.issueType !== "epic"
         ? shortParentLabel(it.parentTitle, 18)
         : null;
+    const runtimeBadge = badgeByIssueId[it.id];
     const showFoot =
+      Boolean(runtimeBadge) ||
       it.modules.length > 0 ||
       openBlockers.length > 0 ||
       (it.lane === "ready" && unlocksCount > 0) ||
@@ -156,6 +160,40 @@ export function BoardView({ issues, modulePrefix, moduleAliases, onRequestClose 
         {/* Row 3: Borderless inline metadata with human-readable parent epic name */}
         {showFoot && (
           <div className="mt-2 flex flex-wrap items-center gap-x-2.5 gap-y-1 text-[11px] text-[var(--fg-3)]">
+            {runtimeBadge && (
+              <span
+                className={`inline-flex items-center gap-1 rounded-[var(--radius-xs)] px-1.5 py-0.25 text-[10.5px] font-medium ${
+                  runtimeBadge.kind === "waiting"
+                    ? "bg-[var(--accent-soft)] text-[var(--accent)]"
+                    : runtimeBadge.kind === "conflict"
+                      ? "bg-[var(--danger)]/10 text-[var(--danger)]"
+                      : runtimeBadge.kind === "working"
+                        ? "bg-[var(--success-soft)] text-[var(--success)]"
+                        : "bg-[var(--surface-subtle)] text-[var(--fg-3)]"
+                }`}
+              >
+                <span
+                  className={`h-1.5 w-1.5 rounded-full ${
+                    runtimeBadge.kind === "waiting"
+                      ? "bg-[var(--accent)]"
+                      : runtimeBadge.kind === "conflict"
+                        ? "bg-[var(--danger)]"
+                        : runtimeBadge.kind === "working"
+                          ? "bg-[var(--success)]"
+                          : "bg-[var(--fg-3)]"
+                  }`}
+                />
+                <span>
+                  {runtimeBadge.kind === "waiting"
+                    ? `${t.board.badgeWaiting} · ${runtimeBadge.label}`
+                    : runtimeBadge.kind === "conflict"
+                      ? t.board.badgeConflict
+                      : runtimeBadge.kind === "stale"
+                        ? t.board.badgeStale
+                        : runtimeBadge.label}
+                </span>
+              </span>
+            )}
             <ModuleInlineList
               modules={it.modules}
               prefix={modulePrefix}

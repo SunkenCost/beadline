@@ -12,10 +12,18 @@ export type BoardLane = "in_progress" | "ready" | "blocked" | "closed";
 
 export type StorageBackend = "native-jsonl" | "dolt-cli";
 
+export type StoreKind = "shared-git-common" | "legacy-beads-dir" | "local-beads-dir";
+
 export interface ManagedBdStatus {
   installed: boolean;
   path: string | null;
   source: string | null;
+  version: string | null;
+}
+
+export interface BlCliStatus {
+  installed: boolean;
+  path: string | null;
   version: string | null;
 }
 
@@ -99,6 +107,15 @@ export interface SmartMeta {
   links: SmartLink[];
 }
 
+export interface IssueProof {
+  summary: string;
+  refs: string[];
+  operationId: string | null;
+  submittedAt: string;
+  sessionId: string | null;
+  actor: string | null;
+}
+
 export interface IssueDto {
   id: string;
   shortId: string;
@@ -107,6 +124,9 @@ export interface IssueDto {
   notes: string;
   acceptanceCriteria: string;
   closeReason: string;
+  scope?: string[];
+  proof?: IssueProof | null;
+  rev?: number;
   status: string;
   lane: BoardLane;
   priority: number;
@@ -150,8 +170,11 @@ export interface BoardStats {
 }
 
 export interface WorkspaceSnapshot {
+  repoId?: string;
   repoName: string;
   repoPath: string;
+  storePath?: string;
+  storeKind?: StoreKind;
   hasBeads: boolean;
   storageBackend: StorageBackend;
   prefix: string | null;
@@ -170,6 +193,152 @@ export interface CommentDto {
   author: string;
   text: string;
   createdAt: string;
+}
+
+export type SessionState = "working" | "waiting_human" | "released";
+
+export interface SessionLease {
+  sessionId: string;
+  issueId: string | null;
+  worktreeId: string;
+  worktreePath: string;
+  branch: string | null;
+  harness: string;
+  agent: string;
+  state: SessionState;
+  summary: string;
+  waitingReason: string | null;
+  scope: string[];
+  threadUrl: string | null;
+  seq: number;
+  startedAt: string;
+  lastSeenAt: string;
+  lastProgressAt: string;
+  expiresAt: string;
+  staleHeartbeat: boolean;
+}
+
+export type ScanStatus = "ok" | "partial" | "stale" | "failed" | "timeout";
+
+export type AttributionSource = "explicit-lease" | "branch-issue-hint" | "unattributed";
+
+export interface WorktreeActivity {
+  worktreeId: string;
+  path: string;
+  branch: string | null;
+  head: string | null;
+  isMain: boolean;
+  isBare: boolean;
+  isLocked: boolean;
+  isPrunable: boolean;
+  scanStatus: ScanStatus;
+  scanError: string | null;
+  observedAtMs: number;
+  modifiedCount: number;
+  untrackedCount: number;
+  dirtySample: string[];
+  truncated: boolean;
+  attribution: AttributionSource;
+  sessionIds: string[];
+  linkedIssueIds: string[];
+}
+
+export type ParticipantKind = "session" | "worktree" | "issue";
+
+export interface ParticipantRef {
+  kind: ParticipantKind;
+  id: string;
+  label: string;
+  issueId: string | null;
+  worktreeId: string | null;
+  branch: string | null;
+  harness: string | null;
+}
+
+export type ConflictKind =
+  | "same-file-dirty"
+  | "dirty-hits-declared-scope"
+  | "declared-scope-overlap";
+
+export interface ConflictEvidence {
+  paths: string[];
+  matchedScopes: string[];
+  totalPaths: number;
+  lockfileOnly: boolean;
+}
+
+export interface ConflictAlert {
+  id: string;
+  kind: ConflictKind;
+  participants: ParticipantRef[];
+  evidence: ConflictEvidence;
+  observedAtMs: number;
+}
+
+export interface BlockerHotspot {
+  issueId: string;
+  shortId: string;
+  title: string;
+  lane: BoardLane;
+  actionable: boolean;
+  directUnblocks: number;
+  totalDownstream: number;
+  downstreamIds: string[];
+}
+
+export type AttentionKind = "waiting-human" | "file-overlap" | "progress-stale" | "heartbeat-stale";
+
+export interface AttentionItem {
+  id: string;
+  kind: AttentionKind;
+  issueId: string | null;
+  sessionId: string | null;
+  conflictId: string | null;
+  harness: string | null;
+  agent: string | null;
+  reason: string;
+  ageMinutes: number;
+  threadUrl: string | null;
+}
+
+export interface RadarCoverage {
+  scopeNote: string;
+  scannedWorktrees: number;
+  totalWorktrees: number;
+  failedWorktrees: number;
+  scanStatus: ScanStatus;
+  observedAtMs: number;
+}
+
+export interface RadarSnapshot {
+  repoId: string;
+  repoPath: string;
+  generation: number;
+  sessions: SessionLease[];
+  worktrees: WorktreeActivity[];
+  conflicts: ConflictAlert[];
+  topBlockers: BlockerHotspot[];
+  attention: AttentionItem[];
+  coverage: RadarCoverage;
+}
+
+export interface DoctorReport {
+  ok: boolean;
+  version: string;
+  repoId: string;
+  repoName: string;
+  worktreeRoot: string;
+  worktreeId: string;
+  branch: string | null;
+  gitCommonDir: string | null;
+  storeDir: string;
+  storeKind: StoreKind;
+  storageBackend: StorageBackend;
+  hasStore: boolean;
+  runtimeDir: string;
+  issueCount: number;
+  activeSessions: number;
+  warnings: string[];
 }
 
 export interface ModuleAliasConfig {
@@ -214,6 +383,7 @@ export interface CreateIssueRequest {
   description?: string;
   acceptanceCriteria?: string;
   notes?: string;
+  scope?: string[];
   blockedBy: string[];
 }
 
@@ -228,6 +398,8 @@ export interface UpdateIssueRequest {
   description?: string;
   acceptanceCriteria?: string;
   notes?: string;
+  scope?: string[];
+  expectedRev?: number;
 }
 
 export interface CreateIssueResponse {

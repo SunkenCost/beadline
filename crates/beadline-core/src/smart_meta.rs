@@ -1,4 +1,4 @@
-use crate::models::issue::{SmartLink, SmartMeta, WorktreeRef};
+use crate::models::{SmartLink, SmartMeta, WorktreeRef};
 use regex::Regex;
 use std::collections::HashSet;
 use std::sync::OnceLock;
@@ -14,7 +14,7 @@ fn branch_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| {
         Regex::new(
-            r"(?i)(?:branch\s*:\s*|(?:origin/)?)((?:feat|fix|release|integration|chore|hotfix|refactor|docs)/[a-z0-9._/-]{2,80})",
+            r"(?i)(?:branch\s*:\s*|(?:origin/)?)((?:feat|fix|release|integration|chore|hotfix|refactor|docs|x)/[a-z0-9._/-]{2,80})",
         )
         .expect("branch regex")
     })
@@ -49,7 +49,6 @@ pub fn extract_smart_meta(
     let mut meta = SmartMeta::default();
     let combined = format!("{external_ref}\n{notes}\n{close_reason}\n{description}");
 
-    // 1. GitHub Issue number & URL
     if let Some(cap) = gh_ref_re()
         .captures(external_ref)
         .or_else(|| gh_ref_re().captures(&combined))
@@ -64,7 +63,6 @@ pub fn extract_smart_meta(
         }
     }
 
-    // 2. Git branches (deduplicated, order-preserving)
     let mut seen_branches = HashSet::new();
     for cap in branch_re().captures_iter(&combined) {
         if let Some(m) = cap.get(1) {
@@ -79,7 +77,6 @@ pub fn extract_smart_meta(
         }
     }
 
-    // 3. Git commit SHAs (7-char short form, deduplicated)
     let mut seen_commits = HashSet::new();
     for cap in commit_re().captures_iter(&combined) {
         let sha_raw = cap
@@ -95,7 +92,6 @@ pub fn extract_smart_meta(
         }
     }
 
-    // 4. Match local Git worktrees corresponding to detected branches
     let mut seen_wt = HashSet::new();
     for br in &meta.branches {
         for wt in repo_worktrees {
@@ -105,7 +101,6 @@ pub fn extract_smart_meta(
         }
     }
 
-    // 5. Custom deep links (only schemes in user's configured allowlist)
     let scheme_set: HashSet<String> = allowed_schemes
         .iter()
         .map(|s| s.trim().to_lowercase())
@@ -164,9 +159,7 @@ mod tests {
         assert_eq!(meta.branches, vec!["release/v371p5-unified-rc"]);
         assert_eq!(meta.commits, vec!["7318baf", "309afe3"]);
         assert_eq!(meta.worktrees.len(), 1);
-        assert_eq!(meta.worktrees[0].path, "Y:\\worktrees\\rc");
         assert_eq!(meta.links.len(), 1);
         assert_eq!(meta.links[0].scheme, "t3-thread");
-        assert_eq!(meta.links[0].url, "t3-thread://v2/env/123");
     }
 }

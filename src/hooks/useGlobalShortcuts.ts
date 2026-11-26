@@ -41,6 +41,8 @@ export function useGlobalShortcuts(focusSearch: () => void) {
       } else if (e.key === "c" || e.key === "C") {
         e.preventDefault();
         ui.openCreateModal();
+      } else if (e.key === "m" || e.key === "M") {
+        ui.setActiveView("mission");
       } else if (e.key === "1") {
         ui.setActiveView("board");
       } else if (e.key === "2") {

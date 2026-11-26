@@ -1,14 +1,14 @@
 <div align="center">
   <img src="./assets/icon.svg" width="64" height="64" alt="Beadline icon" />
   <h1>Beadline</h1>
-  <p><strong>Local-first desktop task &amp; dependency board for AI-assisted coding.</strong></p>
-  <p>Turn local Git project folders into a clear visual workbench for humans, while staying seamlessly compatible with <a href="https://github.com/steveyegge/beads">Beads (<code>bd</code>)</a> and AI coding agents.</p>
+  <p><strong>Local-first multi-agent Mission Control, task &amp; dependency board, and ultra-fast CLI / MCP engine.</strong></p>
+  <p>Keep full visibility when running multiple AI coding agents in parallel across Claude Code, Codex, Cursor, Antigravity, and T3 Code — with zero external database daemons.</p>
   <p>
     <strong>English</strong> · <a href="./README.zh-CN.md">简体中文</a>
   </p>
   <p>
     <img src="https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux-555" alt="Platforms" />
-    <img src="https://img.shields.io/badge/Built%20with-Tauri%20v2%20%2B%20React%2019-D97757" alt="Tauri v2 + React 19" />
+    <img src="https://img.shields.io/badge/Built%20with-Rust%20%2B%20Tauri%20v2%20%2B%20React%2019-D97757" alt="Rust + Tauri v2 + React 19" />
     <img src="https://img.shields.io/badge/License-MIT-46B574" alt="MIT License" />
   </p>
 </div>
@@ -17,79 +17,89 @@
 
 ## What Is Beadline For?
 
-When you build software with AI coding agents (Claude Code, Codex, Cursor, T3 Code, etc.) across multiple threads or repositories, work quickly gets hard to follow:
+When you run multiple AI coding agents concurrently across worktrees or repositories, it is easy to lose track of what is actually happening:
 
-- **Tasks get buried in chat history** — after a few rounds, it's hard to tell what's done, what's running, and what's blocked.
-- **Cloud trackers (Jira / Linear / GitHub Projects) add friction** — they live outside your local repo and slow down agent handoffs.
-- **CLI issue trackers like [Beads (`bd`)](https://github.com/steveyegge/beads) are great for agents, hard for humans to scan** — reading 40 nested subtasks in a terminal gets tiring fast.
+- **Silent file collisions** — two agents editing the same files or overlapping modules across separate worktrees.
+- **Hidden waits & stalls** — not knowing whether an agent is making progress, stalled, or waiting for your input.
+- **Lost task context & blocking chains** — tasks buried in long chat transcripts without a clear view of which single blocker unlocks everything downstream.
+- **Heavy external CLI databases** — external `bd` / Dolt binaries (`~150 MB`) add startup overhead, lock contention, and branch divergence across Git worktrees.
 
-**Beadline bridges humans and AI coding agents in one lightweight local desktop app:**
+**Beadline unifies the entire local stack into one lightweight Rust workspace (`beadline-core` + `bl` CLI/MCP + `beadline` Desktop):**
 
-1. **Plan & visualize locally** — break goals into epics, subtasks, and blocking dependencies across multiple Git repositories.
-2. **Watch agents work in real time** — as agents create, update, or close `.beads/` issues from the terminal, your board, epic progress, and dependency graph update live.
-3. **Hand off tasks in one click** — copy a structured prompt (goal context, acceptance criteria, active blockers, Git branch) straight into your next AI session.
-4. **Works standalone, zero setup** — includes a built-in Rust JSONL engine (`~5 MB` binary, `~90 MB` RAM on Windows), so you don't even need `bd` installed to get started, while staying 100% compatible with existing `bd` / Dolt repos.
+1. **Mission Control ("战情室")** — answers 4 questions in 3 seconds: *What needs my decision right now? Who is doing what (+ unattributed dirty worktrees)? Where are edits or declared scopes overlapping? Which single root blocker should I unblock first?*
+2. **Universal Harness Engine (`bl` + `bl mcp`)** — a standalone `~1.6 MB` native Rust binary exposing **5 lean MCP tools** (`bl_ready`, `bl_show`, `bl_claim`, `bl_pulse`, `bl_finish`) plus a full CLI so Claude Code, Codex CLI, Cursor, Antigravity, T3 Code, and any terminal agent coordinate live.
+3. **One Truth Across All Git Worktrees** — stores authoritative tasks in `<git-common-dir>/beadline/issues.jsonl` (OS file-locked, atomic replace, zero `git status` pollution) and per-session leases in `<git-common-dir>/beadline/runtime/pulses/<session-id>.json` so 5–10 parallel agents never fight over one heartbeat file.
+4. **Beads (`bd`) Interop** — imports/exports `.beads/issues.jsonl` (`bl import --from` / `bl export --format bd-v1` with drift checks) and keeps legacy Dolt `.beads/` workspaces readable.
 
 ## Features
 
 | | What you get |
 |---|---|
-| **Built-In Engine + `bd` Dual Mode** | Works standalone with Beadline's built-in Rust JSONL engine (`<2ms` atomic writes, cycle-checked dependencies, comments). Automatically syncs with Dolt-backed repos when `bd` is installed — or download official `bd` in one click inside Settings. |
-| **5 Focused Views** | **Kanban Board** (flat or grouped by epic), **Epics** progress, interactive **Dependency Graph (DAG)**, filterable **All Issues** table, and **All Active** across every connected repo. |
-| **Multi-Repo & Modules** | Switch between local repos instantly. Slice tasks by module labels (`mod:*`, or custom prefixes like `area:` / `pkg:`) with custom display names and color dots. |
-| **AI Agent Handoff Tools** | One-click **Copy Agent Prompt**. Auto-detects Git branches, commit SHAs, GitHub `#issues`, local worktree folders, and deep links (`t3-thread://`, `vscode://`, `cursor://`). |
-| **Readable Task Context** | Parent epic summaries and close reasons appear at the top of the drawer, with a toggle to fold completed AI iteration rounds on the board. |
-| **Themes & Bilingual UI** | Built-in **Warm Clay**, **Cool Slate**, and **Pure Mono** presets (`Light` / `Dark` / `System`), accent/radius/density controls, Theme JSON import/export, and instant **English / 简体中文** switching. |
-| **Zero Repo Pollution** | App settings, workspace list, and module aliases stay strictly in your OS config folder — nothing extra is ever written to your Git repositories. |
+| **Mission Control & Conflict Radar** | Evidence-graded 3-tier overlap radar (**same dirty file** > **dirty file hits declared scope** > **declared scope overlap**), passive `git --no-optional-locks status` worktree observation, unattributed edit alerts, and actionable root blocker ranking. |
+| **Native `bl` CLI & `bl mcp` Server** | Standalone `~1.6 MB` Rust binary. Five minimal MCP tools (`bl_ready`, `bl_show`, `bl_claim`, `bl_pulse`, `bl_finish`) with idempotent `operationId`, optimistic `rev` checks, structured delivery proof, and 1-click config snippets in Settings. |
+| **6 Focused Views** | **Mission Control**, **Kanban Board** (with single highest-priority runtime badge per card), **Epics**, interactive **Dependency Graph (DAG)**, **All Issues**, and cross-repo **All Active**. |
+| **Cross-Worktree Shared Store** | All worktrees of a Git repo share one OS-locked store in `<git-common-dir>/beadline/` with safe atomic replacement (never deletes target before commit). |
+| **AI Handoff & Context** | One-click **Copy Agent Prompt** embedding why/acceptance/scope plus `bl_claim` / `bl_pulse` / `bl_finish` protocol instructions; auto-detects branches, commits, PRs, worktrees, and deep links. |
+| **Calm Themes & Bilingual UI** | **Warm Clay**, **Cool Slate**, and **Pure Mono** presets (`Light` / `Dark` / `System`), Theme JSON import/export, and instant **English / 简体中文** switching. |
 
 ## Keyboard Shortcuts
 
 | Shortcut | Action |
 |---|---|
+| `M` | Mission Control |
+| `0` – `4` | Switch views (`All Active`, `Board`, `Epics`, `DAG`, `List`) |
 | `Ctrl+K` / `⌘K` | Open command palette |
-| `Ctrl+,` / `⌘,` | Open settings |
+| `Ctrl+,` / `⌘,` | Open settings (Appearance, Engine, AI MCP/CLI Setup) |
 | `C` | New issue |
 | `/` | Focus search filter |
-| `0` – `4` | Switch views (`All Active`, `Board`, `Epics`, `DAG`, `List`) |
 | `Esc` | Close drawer or modal |
 
 ## Quick Start
 
-**Requirements:** Node.js 20+, `pnpm`, and [Rust](https://rustup.rs/). ([`bd` CLI](https://github.com/steveyegge/beads) is optional — only needed for Dolt repos or GitHub sync.)
+**Requirements:** Node.js 20+, `pnpm`, and [Rust 1.89+](https://rustup.rs/).
 
 ```bash
 git clone https://github.com/SunkenCost/beadline.git
 cd beadline
 pnpm install
 
-# Run in development mode
+# Build standalone `bl` CLI + MCP binary (target/release/bl[.exe])
+cargo build --release -p beadline-cli
+
+# Run desktop app in development mode
 pnpm tauri dev
 
-# Build release executable / installer
+# Build release desktop executable
 pnpm tauri build
 ```
 
-## How It Works
+### Connect Your AI Harness
 
-```text
-Local Git Repos (.beads/)
-   │
-   ├── Native Mode ──▶ Built-in Rust JSONL engine (<2ms atomic writes, zero external binary, bd-import compatible)
-   ├── Dolt Mode   ──▶ Rust `notify` watcher + direct `issues.jsonl` reads + serialized `bd` CLI write queue
-   └── App Config  ──▶ Stored strictly in OS config dir (e.g. %APPDATA%\dev.beadline.desktop\)
+Open **Settings → AI Setup (MCP / CLI)** inside Beadline to copy ready-to-paste absolute-path configs for **Claude Code**, **Codex CLI**, **Cursor**, **Antigravity**, or **T3 Code / Universal CLI**, or run directly:
+
+```bash
+bl init
+bl doctor
+bl ready
+bl claim <issue-id> --summary "implementing auth" --scope "src/auth/**"
+bl finish <issue-id> --summary "all unit tests green"
 ```
 
-- **No lock contention:** Reads parse `issues.jsonl` directly with content-based fingerprinting, so browsing never fights concurrent AI agents running `bd`.
-- **Safe initialization & sync:** Non-invasive init writes `.beads/` to `.git/info/exclude` (no Git hooks, `AGENTS.md` untouched) and supports one-click `bd github sync` on Dolt repos.
+## Workspace Architecture
+
+```text
+Cargo Workspace
+├── crates/beadline-core   # RepoLocator, OS-locked JSONL store, per-session leases, Git worktree conflict radar
+├── crates/beadline-cli    # Standalone `bl` CLI & `bl mcp` stdio JSON-RPC 2.0 server (~1.6 MB)
+└── src-tauri              # Tauri v2 desktop shell + dual-channel fs watcher (Board snapshot vs Radar telemetry)
+```
 
 ## Development
 
 ```bash
 pnpm typecheck && pnpm lint && pnpm test
-cd src-tauri && cargo clippy --all-targets -- -D warnings && cargo test
+cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace
 ```
-
-See [docs/design/architecture.md](./docs/design/architecture.md) for technical architecture details.
 
 ## License
 
