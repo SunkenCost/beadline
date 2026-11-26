@@ -38,6 +38,7 @@ const CommandPalette = lazy(() =>
 import { useGlobalShortcuts } from "@/hooks/useGlobalShortcuts";
 import { useSnapshotEvents } from "@/hooks/useSnapshotEvents";
 import { useT } from "@/i18n";
+import { isClosedIterationRound } from "@/lib/human-context";
 import { formatIpcError, ipcPickFolder } from "@/lib/ipc";
 import { resolveModule } from "@/lib/modules";
 import { applyThemeToDocument } from "@/lib/theme";
@@ -82,6 +83,8 @@ export function App() {
     sidebarCollapsed,
     activeModule,
     boardScope,
+    boardGroupMode,
+    hideClosedRounds,
     search,
     setActiveView,
     setSettingsOpen,
@@ -89,6 +92,8 @@ export function App() {
     openDrawer,
     setActiveModule,
     setBoardScope,
+    setBoardGroupMode,
+    setHideClosedRounds,
     setSearch,
     setListLaneFilter,
     pushToast,
@@ -281,6 +286,8 @@ export function App() {
     setListLaneFilter(lane);
     setActiveView("list");
   };
+
+  const hasClosedRounds = useMemo(() => boardIssues.some(isClosedIterationRound), [boardIssues]);
 
   const hasReadyWorkspace = Boolean(snapshot?.hasBeads);
   const viewTitle =
@@ -570,30 +577,70 @@ export function App() {
                   </div>
 
                   {activeView === "board" && (
-                    <div className="inline-flex h-7 items-center rounded-[var(--radius-sm)] border border-[var(--border)] bg-[var(--surface-subtle)] p-0.5">
-                      <button
-                        type="button"
-                        onClick={() => setBoardScope("tasks")}
-                        className={`h-[22px] rounded-[var(--radius-xs)] px-2 text-[11.5px] cursor-pointer ${
-                          boardScope === "tasks"
-                            ? "bg-[var(--surface)] font-medium text-[var(--fg)] shadow-[var(--shadow-xs)]"
-                            : "text-[var(--fg-2)] hover:text-[var(--fg)]"
-                        }`}
-                      >
-                        {t.board.tasksOnly}
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setBoardScope("all")}
-                        className={`h-[22px] rounded-[var(--radius-xs)] px-2 text-[11.5px] cursor-pointer ${
-                          boardScope === "all"
-                            ? "bg-[var(--surface)] font-medium text-[var(--fg)] shadow-[var(--shadow-xs)]"
-                            : "text-[var(--fg-2)] hover:text-[var(--fg)]"
-                        }`}
-                      >
-                        {t.board.withEpics}
-                      </button>
-                    </div>
+                    <>
+                      <div className="inline-flex h-7 items-center rounded-[var(--radius-sm)] border border-[var(--border)] bg-[var(--surface-subtle)] p-0.5">
+                        <button
+                          type="button"
+                          onClick={() => setBoardGroupMode("flat")}
+                          className={`h-[22px] rounded-[var(--radius-xs)] px-2 text-[11.5px] cursor-pointer ${
+                            boardGroupMode === "flat"
+                              ? "bg-[var(--surface)] font-medium text-[var(--fg)] shadow-[var(--shadow-xs)]"
+                              : "text-[var(--fg-2)] hover:text-[var(--fg)]"
+                          }`}
+                        >
+                          {t.board.flatMode}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setBoardGroupMode("epic")}
+                          className={`h-[22px] rounded-[var(--radius-xs)] px-2 text-[11.5px] cursor-pointer ${
+                            boardGroupMode === "epic"
+                              ? "bg-[var(--surface)] font-medium text-[var(--fg)] shadow-[var(--shadow-xs)]"
+                              : "text-[var(--fg-2)] hover:text-[var(--fg)]"
+                          }`}
+                        >
+                          {t.board.groupByEpic}
+                        </button>
+                      </div>
+
+                      {boardGroupMode === "flat" && (
+                        <div className="inline-flex h-7 items-center rounded-[var(--radius-sm)] border border-[var(--border)] bg-[var(--surface-subtle)] p-0.5">
+                          <button
+                            type="button"
+                            onClick={() => setBoardScope("tasks")}
+                            className={`h-[22px] rounded-[var(--radius-xs)] px-2 text-[11.5px] cursor-pointer ${
+                              boardScope === "tasks"
+                                ? "bg-[var(--surface)] font-medium text-[var(--fg)] shadow-[var(--shadow-xs)]"
+                                : "text-[var(--fg-2)] hover:text-[var(--fg)]"
+                            }`}
+                          >
+                            {t.board.tasksOnly}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setBoardScope("all")}
+                            className={`h-[22px] rounded-[var(--radius-xs)] px-2 text-[11.5px] cursor-pointer ${
+                              boardScope === "all"
+                                ? "bg-[var(--surface)] font-medium text-[var(--fg)] shadow-[var(--shadow-xs)]"
+                                : "text-[var(--fg-2)] hover:text-[var(--fg)]"
+                            }`}
+                          >
+                            {t.board.withEpics}
+                          </button>
+                        </div>
+                      )}
+
+                      {hasClosedRounds && (
+                        <Button
+                          size="md"
+                          variant={hideClosedRounds ? "outline" : "ghost"}
+                          onClick={() => setHideClosedRounds(!hideClosedRounds)}
+                          className="text-[11.5px]"
+                        >
+                          {hideClosedRounds ? t.board.showRounds : t.board.hideRounds}
+                        </Button>
+                      )}
+                    </>
                   )}
 
                   <Button

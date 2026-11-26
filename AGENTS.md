@@ -67,6 +67,11 @@ Beadline's flagship aesthetic is **Warm Claude × Coss UI × Linear** (with swit
   - `mod:agent` — Smart link/Worktree parser & Agent Prompt builder
   - `mod:docs` — Open-source docs, specs, CI & release engineering
 - When closing or updating tasks assigned to sub-agents/models, pass `--force` to `bd`.
+- **Human-Readable Issue Writing Law (No Machine-Log Spam)**:
+  - **Titles (<= 25 CJK chars / <= 65 Latin chars)**: State the user-facing outcome or clear engineering goal — never stuff internal function names, file paths, branch names, or model names into titles.
+  - **Mandatory Plain-Language Description**: Every `bd create` must include `-d` starting with a one-sentence plain-language summary ("What this does & why it matters"), followed by acceptance expectations. Never leave `description` blank.
+  - **Technical Metadata Goes in `notes`**: Put `branch`, `commit`, `model`, `wave`, and `t3-thread://` links into `--notes` / `comments`, keeping titles and descriptions readable for humans.
+  - **No Per-Round Card Spam**: For multi-round review/fix loops (`r2/r3/r4`) on the same scope, append round logs via `bd comments add` or `--append-notes` on the existing issue instead of spawning duplicate cards per round.
 
 ### 4. Verification Gates (Before Marking Any Task Done)
 

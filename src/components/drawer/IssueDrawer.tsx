@@ -15,6 +15,7 @@ import { Button } from "@/components/ui/Button";
 import { StatusRing } from "@/components/ui/Icons";
 import { MiniMarkdown } from "@/components/ui/MiniMarkdown";
 import { useT } from "@/i18n";
+import { extractPlainSummary } from "@/lib/human-context";
 import { formatIpcError, ipcGetIssueComments, ipcOpenExternalLink, ipcRevealPath } from "@/lib/ipc";
 import { resolveModule } from "@/lib/modules";
 import { buildAgentPrompt } from "@/lib/prompt-builder";
@@ -125,6 +126,10 @@ export function IssueDrawer({ modulePrefix, moduleAliases, onRequestClose }: Iss
   }, [snapshot?.modules, ownMods, prefix]);
 
   if (!issue || !snapshot) return null;
+
+  const parentIssue = issue.parentId ? (byId[issue.parentId] ?? null) : null;
+  const parentSummary = parentIssue ? extractPlainSummary(parentIssue.description, 160) : "";
+  const promoteCloseReason = !issue.description.trim() && Boolean(issue.closeReason.trim());
 
   const blockers = issue.blockedBy.map((bid) => byId[bid]).filter((x): x is IssueDto => Boolean(x));
   const unlocks = issue.blocks.map((uid) => byId[uid]).filter((x): x is IssueDto => Boolean(x));
@@ -285,6 +290,45 @@ export function IssueDrawer({ modulePrefix, moduleAliases, onRequestClose }: Iss
             }}
             className="-mx-1.5 w-[calc(100%+12px)] rounded-[var(--radius-sm)] border border-transparent px-1.5 py-1 text-[16px] font-semibold text-[var(--fg)] focus:border-[var(--border-strong)] focus:bg-[var(--surface-subtle)]"
           />
+
+          {/* Human-readable Context & Purpose Card — immediately answers "what is this task for?" */}
+          {(parentIssue || promoteCloseReason) && (
+            <div className="space-y-2 rounded-[var(--radius-md)] border border-[var(--border)] bg-[var(--surface-subtle)] px-3.5 py-2.5">
+              <div className="text-[11px] font-medium text-[var(--fg-3)]">
+                {t.drawer.contextHeading}
+              </div>
+              {parentIssue && (
+                <div className="space-y-1">
+                  <button
+                    type="button"
+                    onClick={() => openDrawer(parentIssue.id)}
+                    className="flex w-full items-start gap-2 text-left text-[12.5px] font-medium text-[var(--fg)] hover:text-[var(--accent)] cursor-pointer"
+                  >
+                    <Layers className="mt-0.5 h-3.5 w-3.5 shrink-0 text-[var(--accent)]" />
+                    <span className="min-w-0 flex-1">
+                      <span className="mr-1.5 font-normal text-[var(--fg-3)]">
+                        {t.drawer.contextParentLabel}:
+                      </span>
+                      {parentIssue.title}
+                    </span>
+                  </button>
+                  {parentSummary && (
+                    <p className="pl-5.5 text-[12px] leading-relaxed text-[var(--fg-2)]">
+                      {parentSummary}
+                    </p>
+                  )}
+                </div>
+              )}
+              {promoteCloseReason && (
+                <div className="border-t border-[var(--border-subtle)] pt-2">
+                  <div className="mb-1 text-[11px] font-medium text-[var(--success)]">
+                    {t.drawer.closeReason}
+                  </div>
+                  <MiniMarkdown content={issue.closeReason} tone="success" />
+                </div>
+              )}
+            </div>
+          )}
 
           {/* Smart extracted links, branches, commits, worktrees */}
           {(issue.smart.githubUrl ||
@@ -521,8 +565,8 @@ export function IssueDrawer({ modulePrefix, moduleAliases, onRequestClose }: Iss
             </div>
           </div>
 
-          {/* Parent Epic link */}
-          {issue.parentId && issue.parentTitle && (
+          {/* Parent Epic fallback if parent record isn't loaded in byId */}
+          {!parentIssue && issue.parentId && issue.parentTitle && (
             <button
               type="button"
               onClick={() => openDrawer(issue.parentId ?? "")}
@@ -687,7 +731,10 @@ export function IssueDrawer({ modulePrefix, moduleAliases, onRequestClose }: Iss
               </div>
             ) : (
               <div className="space-y-2.5">
-                <MiniMarkdown content={issue.description} emptyText={t.drawer.noContent} />
+                <MiniMarkdown
+                  content={issue.description}
+                  emptyText={parentIssue ? t.drawer.contextEmptyDescHint : t.drawer.noContent}
+                />
 
                 {issue.acceptanceCriteria.trim() && (
                   <>
@@ -707,7 +754,7 @@ export function IssueDrawer({ modulePrefix, moduleAliases, onRequestClose }: Iss
                   </>
                 )}
 
-                {issue.closeReason.trim() && (
+                {issue.closeReason.trim() && !promoteCloseReason && (
                   <>
                     <div className="text-[11.5px] font-semibold text-[var(--fg-3)]">
                       {t.drawer.closeReason}

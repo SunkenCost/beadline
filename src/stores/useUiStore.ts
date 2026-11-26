@@ -3,6 +3,7 @@ import type { BoardLane } from "@/types/ipc";
 
 export type ActiveView = "all-active" | "board" | "epics" | "dag" | "list";
 export type BoardScope = "tasks" | "all";
+export type BoardGroupMode = "flat" | "epic";
 export type DagMode = "connected" | "active" | "all";
 
 export interface ToastItem {
@@ -21,6 +22,8 @@ interface UiState {
   selectedIssueId: string | null;
   activeModule: string;
   boardScope: BoardScope;
+  boardGroupMode: BoardGroupMode;
+  hideClosedRounds: boolean;
   dagMode: DagMode;
   search: string;
   listLaneFilter: BoardLane | "";
@@ -36,6 +39,8 @@ interface UiState {
   closeDrawer: () => void;
   setActiveModule: (mod: string) => void;
   setBoardScope: (scope: BoardScope) => void;
+  setBoardGroupMode: (mode: BoardGroupMode) => void;
+  setHideClosedRounds: (hide: boolean) => void;
   setDagMode: (mode: DagMode) => void;
   setSearch: (q: string) => void;
   setListLaneFilter: (lane: BoardLane | "") => void;
@@ -55,6 +60,8 @@ export const useUiStore = create<UiState>((set) => ({
   selectedIssueId: null,
   activeModule: "",
   boardScope: "tasks",
+  boardGroupMode: "flat",
+  hideClosedRounds: false,
   dagMode: "connected",
   search: "",
   listLaneFilter: "",
@@ -71,6 +78,8 @@ export const useUiStore = create<UiState>((set) => ({
   closeDrawer: () => set({ selectedIssueId: null }),
   setActiveModule: (activeModule) => set({ activeModule }),
   setBoardScope: (boardScope) => set({ boardScope }),
+  setBoardGroupMode: (boardGroupMode) => set({ boardGroupMode }),
+  setHideClosedRounds: (hideClosedRounds) => set({ hideClosedRounds }),
   setDagMode: (dagMode) => set({ dagMode }),
   setSearch: (search) => set({ search }),
   setListLaneFilter: (listLaneFilter) => set({ listLaneFilter }),
