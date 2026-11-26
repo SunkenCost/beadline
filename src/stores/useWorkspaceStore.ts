@@ -49,7 +49,7 @@ interface WorkspaceState {
   loadAll: () => Promise<void>;
   refreshWorkspaces: () => Promise<void>;
   refreshAllActive: () => Promise<void>;
-  applyAllActive: (items: CrossProjectActiveItem[]) => void;
+  applyAllActive: (items: CrossProjectActiveItem[]) => boolean;
   selectWorkspace: (path: string) => Promise<void>;
   addWorkspace: (path: string) => Promise<void>;
   removeWorkspace: (path: string) => Promise<void>;
@@ -61,7 +61,7 @@ interface WorkspaceState {
   }) => Promise<void>;
   initBeads: (path: string, prefix?: string) => Promise<void>;
   refreshSnapshot: (force?: boolean) => Promise<void>;
-  applySnapshot: (snap: WorkspaceSnapshot) => void;
+  applySnapshot: (snap: WorkspaceSnapshot) => boolean;
 
   createIssue: (req: Omit<CreateIssueRequest, "workspacePath">) => Promise<string | null>;
   updateIssue: (req: Omit<UpdateIssueRequest, "workspacePath">) => Promise<void>;
@@ -79,6 +79,27 @@ function indexById(issues: IssueDto[]): Record<string, IssueDto> {
   return map;
 }
 
+function sameAllActive(a: CrossProjectActiveItem[], b: CrossProjectActiveItem[]): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i += 1) {
+    const x = a[i];
+    const y = b[i];
+    if (
+      !x ||
+      !y ||
+      x.workspacePath !== y.workspacePath ||
+      x.issue.id !== y.issue.id ||
+      x.issue.updatedAt !== y.issue.updatedAt ||
+      x.issue.status !== y.issue.status ||
+      x.issue.priority !== y.issue.priority ||
+      x.issue.title !== y.issue.title
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
+
 export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
   workspaces: [],
   activePath: null,
@@ -91,13 +112,33 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
   loading: false,
 
   applyAllActive: (items) => {
+    if (sameAllActive(get().allActive, items)) {
+      return false;
+    }
     set({ allActive: items });
+    return true;
   },
 
   applySnapshot: (snap) => {
-    const active = get().activePath;
+    const state = get();
+    const active = state.activePath;
     if (active && snap.repoPath.toLowerCase() !== active.toLowerCase()) {
-      return;
+      return false;
+    }
+    const prev = state.snapshot;
+    if (
+      prev &&
+      prev.repoPath.toLowerCase() === snap.repoPath.toLowerCase() &&
+      prev.fingerprint === snap.fingerprint &&
+      prev.issues.length === snap.issues.length &&
+      prev.stats.total === snap.stats.total &&
+      prev.stats.inProgress === snap.stats.inProgress &&
+      prev.stats.closed === snap.stats.closed
+    ) {
+      if (state.syncStatus !== "idle" || state.lastError !== null) {
+        set({ syncStatus: "idle", lastError: null });
+      }
+      return false;
     }
     set((s) => ({
       snapshot: snap,
@@ -117,6 +158,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
           : w,
       ),
     }));
+    return true;
   },
 
   loadAll: async () => {

@@ -29,9 +29,16 @@ export function CreateIssueModal({
 }) {
   const t = useT();
   const locale = useSettingsStore((s) => s.settings.language);
-  const { createModalOpen, createParentId, activeModule, closeCreateModal, openDrawer, pushToast } =
-    useUiStore();
-  const { snapshot, byId, createIssue } = useWorkspaceStore();
+  const createModalOpen = useUiStore((s) => s.createModalOpen);
+  const createParentId = useUiStore((s) => s.createParentId);
+  const activeModule = useUiStore((s) => s.activeModule);
+  const closeCreateModal = useUiStore((s) => s.closeCreateModal);
+  const openDrawer = useUiStore((s) => s.openDrawer);
+  const pushToast = useUiStore((s) => s.pushToast);
+
+  const snapshot = useWorkspaceStore((s) => s.snapshot);
+  const byId = useWorkspaceStore((s) => s.byId);
+  const createIssue = useWorkspaceStore((s) => s.createIssue);
 
   const [title, setTitle] = useState("");
   const [issueType, setIssueType] = useState("task");
@@ -64,14 +71,15 @@ export function CreateIssueModal({
 
     const pid = createParentId ?? "";
     setParentId(pid);
-    if (pid && byId[pid]?.modules.length) {
-      setSelectedMods([...(byId[pid]?.modules ?? [])]);
+    const parent = pid ? useWorkspaceStore.getState().byId[pid] : undefined;
+    if (parent?.modules.length) {
+      setSelectedMods([...parent.modules]);
     } else if (activeModule) {
       setSelectedMods([activeModule]);
     } else {
       setSelectedMods([]);
     }
-  }, [createModalOpen, createParentId, activeModule, byId]);
+  }, [createModalOpen, createParentId, activeModule]);
 
   const modChoices = useMemo(() => {
     const set = new Set<string>();

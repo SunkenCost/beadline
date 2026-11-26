@@ -1,4 +1,5 @@
 use crate::config::store::{normalize_display_path, ConfigStore};
+use crate::engine::jsonl_reader::fnv1a64;
 use crate::engine::workspace_mgr::{log_watch_warning, WorkspaceManager};
 use crate::models::settings::AppSettings;
 use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
@@ -226,6 +227,9 @@ impl BackgroundWatch {
         // One debouncer for all background repos keeps a burst of edits from
         // triggering one complete cross-project scan per repository.
         let task = tokio::spawn(async move {
+            let mut last_fps: HashMap<String, String> = HashMap::new();
+            let mut last_payload_hash: Option<u64> = None;
+
             loop {
                 pending.ready.notified().await;
                 tokio::time::sleep(Duration::from_millis(350)).await;
@@ -234,12 +238,31 @@ impl BackgroundWatch {
                     continue;
                 }
 
-                let cfg = settings.lock().await.clone();
+                // Ignore spurious mtime-only touches (such as `bd --readonly` or self-exports)
+                // whose content-based Dolt/JSONL fingerprint did not actually change.
+                let mut changed_paths = Vec::new();
                 for path in paths {
+                    let fp = workspace_mgr.fingerprint_for(&path);
+                    if last_fps.get(&path).is_some_and(|prev| prev == &fp) {
+                        continue;
+                    }
+                    last_fps.insert(path.clone(), fp);
+                    changed_paths.push(path);
+                }
+                if changed_paths.is_empty() {
+                    continue;
+                }
+
+                let cfg = settings.lock().await.clone();
+                for path in changed_paths {
                     workspace_mgr.refresh_stale_jsonl(path, &cfg).await;
                 }
                 if let Ok(items) = workspace_mgr.get_all_active(&cfg).await {
-                    let _ = app.emit(ALL_ACTIVE_UPDATED_EVENT, &items);
+                    let payload_hash = serde_json::to_vec(&items).ok().map(|b| fnv1a64(&b));
+                    if payload_hash.is_none() || payload_hash != last_payload_hash {
+                        last_payload_hash = payload_hash;
+                        let _ = app.emit(ALL_ACTIVE_UPDATED_EVENT, &items);
+                    }
                 }
             }
         });
@@ -338,6 +361,7 @@ fn is_relevant_path(relative: &Path) -> bool {
             || lower.ends_with(".tmp")
             || lower == "lock"
             || lower == "tempfiles"
+            || lower == "temptf"
     }) {
         return false;
     }

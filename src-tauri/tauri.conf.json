@@ -22,7 +22,7 @@
         "center": true,
         "decorations": false,
         "shadow": true,
-        "additionalBrowserArgs": "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection,msEdgeOnRamp",
+        "additionalBrowserArgs": "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection,msEdgeOnRamp,Translate,OptimizationHints,MediaRouter --disable-component-update --disable-background-networking --disable-sync --num-raster-threads=1 --js-flags=--max-old-space-size=128",
         "transparent": false,
         "resizable": true,
         "visible": false

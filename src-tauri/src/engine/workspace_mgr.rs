@@ -2,7 +2,8 @@ use crate::config::store::{normalize_display_path, paths_equal, ConfigStore};
 use crate::engine::bd_cli::{fetch_gh_auth_token, resolve_bd_binary, run_bd};
 use crate::engine::git_meta::{detect_github_repo, list_git_worktrees, read_beads_config_values};
 use crate::engine::jsonl_reader::{
-    compute_fingerprint, file_mtime_ms, latest_dolt_mtime_ms, read_workspace_snapshot,
+    compute_fingerprint, dolt_state_token, file_mtime_ms, latest_dolt_mtime_ms,
+    read_workspace_snapshot,
 };
 use crate::error::{AppError, AppResult};
 use crate::models::issue::{
@@ -25,6 +26,8 @@ use tokio::sync::Mutex;
 use tracing::{debug, warn};
 
 const GIT_METADATA_TTL: Duration = Duration::from_secs(30);
+const EXPORT_COALESCE_COOLDOWN: Duration = Duration::from_secs(5);
+const EXPORT_FAILURE_BACKOFF: Duration = Duration::from_secs(30);
 type GitMetadata = (Option<String>, Vec<WorktreeRef>);
 type GitMetadataSlot = Arc<Mutex<Option<CachedGitMetadata>>>;
 
@@ -33,10 +36,28 @@ struct CachedGitMetadata {
     value: GitMetadata,
 }
 
+#[derive(Debug, Clone)]
+struct ExportRecord {
+    exported_dolt_token: String,
+    last_attempt: Instant,
+    last_failed: bool,
+}
+
+struct DiscoveredWorkspace {
+    name: String,
+    path: String,
+    has_beads: bool,
+    is_registered: bool,
+    pinned: bool,
+    module_prefix: String,
+    module_aliases: BTreeMap<String, ModuleAliasConfig>,
+}
+
 pub struct WorkspaceManager {
     config_store: ConfigStore,
     write_locks: Mutex<HashMap<String, Arc<Mutex<()>>>>,
     export_in_flight: Mutex<HashMap<String, Arc<AtomicBool>>>,
+    export_records: Mutex<HashMap<String, ExportRecord>>,
     git_metadata: Mutex<HashMap<String, GitMetadataSlot>>,
 }
 
@@ -46,6 +67,7 @@ impl WorkspaceManager {
             config_store,
             write_locks: Mutex::new(HashMap::new()),
             export_in_flight: Mutex::new(HashMap::new()),
+            export_records: Mutex::new(HashMap::new()),
             git_metadata: Mutex::new(HashMap::new()),
         }
     }
@@ -64,30 +86,33 @@ impl WorkspaceManager {
             .clone()
     }
 
-    pub async fn list_workspaces(
-        &self,
-        settings: &AppSettings,
-    ) -> AppResult<WorkspaceListResponse> {
+    fn discover_workspaces(&self) -> (Option<String>, Vec<DiscoveredWorkspace>) {
         let store_data = self.config_store.load_workspaces();
         let mut seen = HashSet::new();
-        let mut summaries = Vec::new();
+        let mut found = Vec::new();
 
         // 1. Registered workspaces
         for entry in &store_data.entries {
             let norm = normalize_display_path(&entry.path);
             let key = norm.to_lowercase();
-            if !Path::new(&norm).is_dir() || !seen.insert(key) {
+            let root = Path::new(&norm);
+            if !root.is_dir() || !seen.insert(key) {
                 continue;
             }
-            summaries.push(self.summarize_workspace(
-                Path::new(&norm),
-                norm.clone(),
-                true,
-                entry.pinned,
-                &entry.module_prefix,
-                entry.module_aliases.clone(),
-                settings,
-            ));
+            let name = root
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("workspace")
+                .to_string();
+            found.push(DiscoveredWorkspace {
+                name,
+                has_beads: root.join(".beads").is_dir(),
+                path: norm,
+                is_registered: true,
+                pinned: entry.pinned,
+                module_prefix: entry.module_prefix.clone(),
+                module_aliases: entry.module_aliases.clone(),
+            });
         }
 
         // 2. Auto-discover immediate sibling Git/Beads repositories of registered workspaces
@@ -115,20 +140,25 @@ impl WorkspaceManager {
                 if !seen.insert(norm.to_lowercase()) {
                     continue;
                 }
-                summaries.push(self.summarize_workspace(
-                    &p,
-                    norm,
-                    false,
-                    false,
-                    "mod:",
-                    BTreeMap::new(),
-                    settings,
-                ));
+                let name = p
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("workspace")
+                    .to_string();
+                found.push(DiscoveredWorkspace {
+                    name,
+                    path: norm,
+                    has_beads,
+                    is_registered: false,
+                    pinned: false,
+                    module_prefix: "mod:".to_string(),
+                    module_aliases: BTreeMap::new(),
+                });
             }
         }
 
         // Sort: pinned desc, has_beads desc, registered desc, name asc
-        summaries.sort_by(|a, b| {
+        found.sort_by(|a, b| {
             b.pinned
                 .cmp(&a.pinned)
                 .then_with(|| b.has_beads.cmp(&a.has_beads))
@@ -140,12 +170,35 @@ impl WorkspaceManager {
             .active_path
             .filter(|p| Path::new(p).is_dir())
             .or_else(|| {
-                summaries
+                found
                     .iter()
                     .find(|s| s.has_beads)
-                    .or_else(|| summaries.first())
+                    .or_else(|| found.first())
                     .map(|s| s.path.clone())
             });
+
+        (active, found)
+    }
+
+    pub async fn list_workspaces(
+        &self,
+        settings: &AppSettings,
+    ) -> AppResult<WorkspaceListResponse> {
+        let (active, discovered) = self.discover_workspaces();
+        let summaries = discovered
+            .into_iter()
+            .map(|ws| {
+                self.summarize_workspace(
+                    Path::new(&ws.path),
+                    ws.path.clone(),
+                    ws.is_registered,
+                    ws.pinned,
+                    &ws.module_prefix,
+                    ws.module_aliases,
+                    settings,
+                )
+            })
+            .collect();
 
         Ok(WorkspaceListResponse {
             active_path: active,
@@ -236,19 +289,16 @@ impl WorkspaceManager {
         let beads_dir = root.join(".beads");
         if beads_dir.is_dir() {
             let jsonl = beads_dir.join("issues.jsonl");
-            let dolt_mt = latest_dolt_mtime_ms(&beads_dir);
-            let jsonl_mt = file_mtime_ms(&jsonl);
-            let needs_export = force_export || !jsonl.exists() || (dolt_mt > jsonl_mt + 250);
-
-            if needs_export {
-                if !jsonl.exists() || force_export {
-                    // Blocking quick export when JSONL does not exist yet or user explicitly requested force refresh
-                    let _ = self.export_jsonl_locked(&root, &norm, settings).await;
-                } else {
-                    // Coalesced non-blocking background export so UI stays <25ms
-                    self.schedule_background_export(root.clone(), norm.clone(), settings.clone())
-                        .await;
-                }
+            if !jsonl.exists() || force_export {
+                // Blocking quick export when JSONL does not exist yet or user explicitly requested force refresh
+                let _ = self.export_jsonl_locked(&root, &norm, settings).await;
+            } else if self
+                .should_background_export(&norm, &beads_dir, &jsonl)
+                .await
+            {
+                // Coalesced non-blocking background export so UI stays <25ms
+                self.schedule_background_export(root.clone(), norm.clone(), settings.clone())
+                    .await;
             }
         }
 
@@ -299,6 +349,67 @@ impl WorkspaceManager {
         value
     }
 
+    pub(crate) async fn should_background_export(
+        &self,
+        norm: &str,
+        beads_dir: &Path,
+        jsonl: &Path,
+    ) -> bool {
+        let key = norm.to_lowercase();
+        let dolt_token = dolt_state_token(beads_dir);
+
+        if !jsonl.exists() {
+            let records = self.export_records.lock().await;
+            if let Some(rec) = records.get(&key) {
+                if rec.last_failed && rec.last_attempt.elapsed() < EXPORT_FAILURE_BACKOFF {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        if dolt_token.is_empty() {
+            return false;
+        }
+
+        let dolt_mt = latest_dolt_mtime_ms(beads_dir);
+        let jsonl_mt = file_mtime_ms(jsonl);
+        if dolt_mt <= jsonl_mt + 500 {
+            let mut records = self.export_records.lock().await;
+            records
+                .entry(key)
+                .and_modify(|rec| {
+                    rec.exported_dolt_token.clone_from(&dolt_token);
+                    rec.last_failed = false;
+                })
+                .or_insert_with(|| ExportRecord {
+                    exported_dolt_token: dolt_token,
+                    last_attempt: Instant::now(),
+                    last_failed: false,
+                });
+            return false;
+        }
+
+        let records = self.export_records.lock().await;
+        if let Some(rec) = records.get(&key) {
+            // Embedded Dolt rewrites manifest mtime even on --readonly reads and bd export;
+            // if the Dolt root-hash token already matches our last export, skip completely.
+            if rec.exported_dolt_token == dolt_token {
+                return false;
+            }
+            let cooldown = if rec.last_failed {
+                EXPORT_FAILURE_BACKOFF
+            } else {
+                EXPORT_COALESCE_COOLDOWN
+            };
+            if rec.last_attempt.elapsed() < cooldown {
+                return false;
+            }
+        }
+
+        true
+    }
+
     pub(crate) async fn refresh_stale_jsonl(
         self: &Arc<Self>,
         normalized_path: String,
@@ -308,7 +419,9 @@ impl WorkspaceManager {
         let beads_dir = root.join(".beads");
         let jsonl = beads_dir.join("issues.jsonl");
         if beads_dir.is_dir()
-            && (!jsonl.exists() || latest_dolt_mtime_ms(&beads_dir) > file_mtime_ms(&jsonl) + 250)
+            && self
+                .should_background_export(&normalized_path, &beads_dir, &jsonl)
+                .await
         {
             self.schedule_background_export(root, normalized_path, settings.clone())
                 .await;
@@ -335,6 +448,50 @@ impl WorkspaceManager {
         });
     }
 
+    async fn record_export_success(&self, norm: &str, beads_dir: &Path) {
+        let token = dolt_state_token(beads_dir);
+        let mut records = self.export_records.lock().await;
+        records.insert(
+            norm.to_lowercase(),
+            ExportRecord {
+                exported_dolt_token: token,
+                last_attempt: Instant::now(),
+                last_failed: false,
+            },
+        );
+    }
+
+    async fn export_jsonl_already_locked(&self, bd_bin: &Path, root: &Path, norm: &str) {
+        let key = norm.to_lowercase();
+        let beads_dir = root.join(".beads");
+        let args = vec![
+            "--sandbox".into(),
+            "export".into(),
+            "-o".into(),
+            ".beads/issues.jsonl".into(),
+        ];
+        match run_bd(bd_bin, root, &args, None, 30).await {
+            Ok(_) => {
+                self.record_export_success(norm, &beads_dir).await;
+            }
+            Err(err) => {
+                let mut records = self.export_records.lock().await;
+                records
+                    .entry(key)
+                    .and_modify(|rec| {
+                        rec.last_attempt = Instant::now();
+                        rec.last_failed = true;
+                    })
+                    .or_insert_with(|| ExportRecord {
+                        exported_dolt_token: String::new(),
+                        last_attempt: Instant::now(),
+                        last_failed: true,
+                    });
+                debug!("bd export skipped/failed for {norm}: {err}");
+            }
+        }
+    }
+
     async fn export_jsonl_locked(
         &self,
         root: &Path,
@@ -346,15 +503,7 @@ impl WorkspaceManager {
         };
         let lock = self.lock_for(norm).await;
         let _guard = lock.lock().await;
-        let args = vec![
-            "--sandbox".into(),
-            "export".into(),
-            "-o".into(),
-            ".beads/issues.jsonl".into(),
-        ];
-        if let Err(err) = run_bd(&bd_bin, root, &args, None, 15).await {
-            debug!("background bd export skipped/failed for {norm}: {err}");
-        }
+        self.export_jsonl_already_locked(&bd_bin, root, norm).await;
         Ok(())
     }
 
@@ -362,10 +511,10 @@ impl WorkspaceManager {
         self: &Arc<Self>,
         settings: &AppSettings,
     ) -> AppResult<Vec<CrossProjectActiveItem>> {
-        let list = self.list_workspaces(settings).await?;
+        let (_, discovered) = self.discover_workspaces();
         let mut results = Vec::new();
 
-        for ws in list.workspaces.into_iter().filter(|w| w.has_beads) {
+        for ws in discovered.into_iter().filter(|w| w.has_beads) {
             if let Ok(snap) = read_workspace_snapshot(
                 Path::new(&ws.path),
                 ws.path.clone(),
@@ -436,13 +585,8 @@ impl WorkspaceManager {
             ];
             let _ = run_bd(&bd_bin, &root, &cfg_args, None, 15).await;
 
-            let exp_args = vec![
-                "--sandbox".into(),
-                "export".into(),
-                "-o".into(),
-                ".beads/issues.jsonl".into(),
-            ];
-            let _ = run_bd(&bd_bin, &root, &exp_args, None, 15).await;
+            self.export_jsonl_already_locked(&bd_bin, &root, &norm)
+                .await;
         }
 
         self.config_store
@@ -459,6 +603,10 @@ impl WorkspaceManager {
         let norm = normalize_display_path(workspace_path);
         let root = PathBuf::from(&norm);
         let bd_bin = resolve_bd_binary(settings.bd_path.as_deref())?;
+        // Serialize against bd export on the same workspace so embedded Dolt never
+        // collides on its exclusive store lock.
+        let lock = self.lock_for(&norm).await;
+        let _guard = lock.lock().await;
         let args = vec![
             "--readonly".into(),
             "comments".into(),
@@ -616,19 +764,8 @@ impl WorkspaceManager {
                 }
             }
 
-            let _ = run_bd(
-                &bd_bin,
-                &root,
-                &[
-                    "--sandbox".into(),
-                    "export".into(),
-                    "-o".into(),
-                    ".beads/issues.jsonl".into(),
-                ],
-                None,
-                15,
-            )
-            .await;
+            self.export_jsonl_already_locked(&bd_bin, &root, &norm)
+                .await;
 
             id
         };
@@ -690,19 +827,8 @@ impl WorkspaceManager {
             }
 
             run_bd(&bd_bin, &root, &args, None, 20).await?;
-            let _ = run_bd(
-                &bd_bin,
-                &root,
-                &[
-                    "--sandbox".into(),
-                    "export".into(),
-                    "-o".into(),
-                    ".beads/issues.jsonl".into(),
-                ],
-                None,
-                15,
-            )
-            .await;
+            self.export_jsonl_already_locked(&bd_bin, &root, &norm)
+                .await;
         }
 
         self.get_snapshot(&norm, settings, false).await
@@ -731,19 +857,8 @@ impl WorkspaceManager {
                 args.push(r.to_string());
             }
             run_bd(&bd_bin, &root, &args, None, 20).await?;
-            let _ = run_bd(
-                &bd_bin,
-                &root,
-                &[
-                    "--sandbox".into(),
-                    "export".into(),
-                    "-o".into(),
-                    ".beads/issues.jsonl".into(),
-                ],
-                None,
-                15,
-            )
-            .await;
+            self.export_jsonl_already_locked(&bd_bin, &root, &norm)
+                .await;
         }
 
         self.get_snapshot(&norm, settings, false).await
@@ -781,19 +896,8 @@ impl WorkspaceManager {
                 }
                 run_bd(&bd_bin, &root, &fb, None, 20).await?;
             }
-            let _ = run_bd(
-                &bd_bin,
-                &root,
-                &[
-                    "--sandbox".into(),
-                    "export".into(),
-                    "-o".into(),
-                    ".beads/issues.jsonl".into(),
-                ],
-                None,
-                15,
-            )
-            .await;
+            self.export_jsonl_already_locked(&bd_bin, &root, &norm)
+                .await;
         }
 
         self.get_snapshot(&norm, settings, false).await
@@ -821,19 +925,8 @@ impl WorkspaceManager {
                 blocker_id.to_string(),
             ];
             run_bd(&bd_bin, &root, &args, None, 20).await?;
-            let _ = run_bd(
-                &bd_bin,
-                &root,
-                &[
-                    "--sandbox".into(),
-                    "export".into(),
-                    "-o".into(),
-                    ".beads/issues.jsonl".into(),
-                ],
-                None,
-                15,
-            )
-            .await;
+            self.export_jsonl_already_locked(&bd_bin, &root, &norm)
+                .await;
         }
 
         self.get_snapshot(&norm, settings, false).await
@@ -860,19 +953,8 @@ impl WorkspaceManager {
                 text.trim().to_string(),
             ];
             run_bd(&bd_bin, &root, &args, None, 20).await?;
-            let _ = run_bd(
-                &bd_bin,
-                &root,
-                &[
-                    "--sandbox".into(),
-                    "export".into(),
-                    "-o".into(),
-                    ".beads/issues.jsonl".into(),
-                ],
-                None,
-                15,
-            )
-            .await;
+            self.export_jsonl_already_locked(&bd_bin, &root, &norm)
+                .await;
         }
 
         self.get_snapshot(&norm, settings, false).await
@@ -914,19 +996,8 @@ impl WorkspaceManager {
             )
             .await?;
 
-            let _ = run_bd(
-                &bd_bin,
-                &root,
-                &[
-                    "--sandbox".into(),
-                    "export".into(),
-                    "-o".into(),
-                    ".beads/issues.jsonl".into(),
-                ],
-                None,
-                15,
-            )
-            .await;
+            self.export_jsonl_already_locked(&bd_bin, &root, &norm)
+                .await;
 
             out.stdout.trim().to_string()
         };
@@ -1040,6 +1111,58 @@ mod tests {
             mgr.cached_git_metadata("workspace", false, || async { panic!("cache miss") })
                 .await,
             expected
+        );
+    }
+
+    #[tokio::test]
+    async fn should_background_export_skips_already_exported_token_and_backs_off_on_failure() {
+        let (dir, mgr) = fixture();
+        let ws = dir.path().join("repo");
+        let beads = ws.join(".beads");
+        let noms = beads.join("embeddeddolt/bl/.dolt/noms");
+        std::fs::create_dir_all(&noms).expect("mkdir");
+        let jsonl = beads.join("issues.jsonl");
+        let manifest = noms.join("manifest");
+        std::fs::write(&jsonl, "{}\n").expect("write jsonl");
+        std::thread::sleep(Duration::from_millis(650));
+        std::fs::write(&manifest, "5:__DOLT__:lock1:root_v1:0000:vvvv:1").expect("write manifest");
+
+        let ws_str = ws.to_string_lossy().to_string();
+        assert!(
+            mgr.should_background_export(&ws_str, &beads, &jsonl).await,
+            "fresh Dolt write newer than JSONL should trigger export"
+        );
+
+        // Simulate successful export recording current Dolt token
+        let token = dolt_state_token(&beads);
+        mgr.export_records.lock().await.insert(
+            ws_str.to_lowercase(),
+            ExportRecord {
+                exported_dolt_token: token,
+                last_attempt: Instant::now(),
+                last_failed: false,
+            },
+        );
+        // Even if manifest mtime is newer (e.g. bd --readonly touched it), identical token skips export
+        assert!(
+            !mgr.should_background_export(&ws_str, &beads, &jsonl).await,
+            "identical Dolt token must suppress re-export"
+        );
+
+        // Simulate failed export on a new Dolt token -> backoff suppresses immediate retry
+        std::fs::write(&manifest, "5:__DOLT__:lock2:root_v2:0000:vvvv:2")
+            .expect("write manifest 2");
+        mgr.export_records.lock().await.insert(
+            ws_str.to_lowercase(),
+            ExportRecord {
+                exported_dolt_token: String::new(),
+                last_attempt: Instant::now(),
+                last_failed: true,
+            },
+        );
+        assert!(
+            !mgr.should_background_export(&ws_str, &beads, &jsonl).await,
+            "recent export failure must enforce backoff"
         );
     }
 }

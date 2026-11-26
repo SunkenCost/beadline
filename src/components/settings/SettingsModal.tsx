@@ -82,21 +82,18 @@ export function SettingsModal() {
 
   useEffect(() => {
     if (!open) return;
+    const ws = useWorkspaceStore
+      .getState()
+      .workspaces.find((w) => activePath && w.path.toLowerCase() === activePath.toLowerCase());
     setBdPathDraft(settings.bdPath ?? "");
     setSchemesDraft(settings.deepLinkSchemes.join(", "));
-    setModPrefixDraft(currentWs?.modulePrefix ?? "mod:");
-    setAliasesDraft({ ...(currentWs?.moduleAliases ?? {}) });
+    setModPrefixDraft(ws?.modulePrefix ?? "mod:");
+    setAliasesDraft({ ...(ws?.moduleAliases ?? {}) });
     setStatusMsg(null);
     void ipcDetectBdPath()
       .then((found) => setDetectedBd(found))
       .catch(() => setDetectedBd(null));
-  }, [
-    open,
-    settings.bdPath,
-    settings.deepLinkSchemes,
-    currentWs?.modulePrefix,
-    currentWs?.moduleAliases,
-  ]);
+  }, [open, activePath, settings.bdPath, settings.deepLinkSchemes]);
 
   const showNotice = (kind: "ok" | "err", text: string) => {
     setStatusMsg({ kind, text });

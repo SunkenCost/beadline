@@ -160,14 +160,40 @@ pub fn normalize_display_path(raw: &str) -> String {
 }
 
 pub fn paths_equal(a: &str, b: &str) -> bool {
-    let na = normalize_display_path(a);
-    let nb = normalize_display_path(b);
+    // Fast path: avoid repeated fs::canonicalize syscalls when strings already match
+    // after trimming trailing separators and normalizing slash direction.
+    let clean = |s: &str| {
+        let stripped = s.trim().trim_end_matches(['\\', '/']);
+        #[cfg(windows)]
+        {
+            stripped
+                .strip_prefix(r"\\?\")
+                .unwrap_or(stripped)
+                .replace('/', "\\")
+        }
+        #[cfg(not(windows))]
+        {
+            stripped.to_string()
+        }
+    };
+    let ca = clean(a);
+    let cb = clean(b);
     #[cfg(windows)]
     {
+        if ca.eq_ignore_ascii_case(&cb) {
+            return true;
+        }
+        let na = normalize_display_path(a);
+        let nb = normalize_display_path(b);
         na.eq_ignore_ascii_case(&nb)
     }
     #[cfg(not(windows))]
     {
+        if ca == cb {
+            return true;
+        }
+        let na = normalize_display_path(a);
+        let nb = normalize_display_path(b);
         na == nb
     }
 }

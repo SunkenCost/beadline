@@ -103,6 +103,36 @@ fn capture_window_geometry(window: &tauri::WebviewWindow) -> Option<WindowGeomet
     })
 }
 
+/// Hint WebView2 on Windows to drop V8/Blink/GPU caches when the window is unfocused
+/// or minimized, and restore full performance when focused.
+fn set_webview_memory_target(window: &tauri::WebviewWindow, low: bool) {
+    #[cfg(windows)]
+    {
+        use webview2_com::Microsoft::Web::WebView2::Win32::{
+            ICoreWebView2_19, COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_LOW,
+            COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_NORMAL,
+        };
+        use windows_core::Interface;
+
+        let level = if low {
+            COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_LOW
+        } else {
+            COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_NORMAL
+        };
+        let _ = window.with_webview(move |webview| unsafe {
+            if let Ok(core) = webview.controller().CoreWebView2() {
+                if let Ok(wv19) = core.cast::<ICoreWebView2_19>() {
+                    let _ = wv19.SetMemoryUsageTargetLevel(level);
+                }
+            }
+        });
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = (window, low);
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     init_tracing();
@@ -139,6 +169,9 @@ pub fn run() {
                 let window_for_events = window.clone();
 
                 window.on_window_event(move |event| match event {
+                    WindowEvent::Focused(focused) => {
+                        set_webview_memory_target(&window_for_events, !focused);
+                    }
                     WindowEvent::Moved(_) | WindowEvent::Resized(_) => {
                         if let Some(geo) = capture_window_geometry(&window_for_events) {
                             if !geo.maximized {

@@ -71,6 +71,84 @@ fn default_task() -> String {
     "task".to_string()
 }
 
+pub fn fnv1a64(bytes: &[u8]) -> u64 {
+    let mut hash: u64 = 0xcbf29ce484222325;
+    for &b in bytes {
+        hash ^= u64::from(b);
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    hash
+}
+
+/// Content-based Dolt state token derived from the actual bytes of `manifest` / `HEAD`
+/// files inside `.beads/embeddeddolt` or `.beads/dolt`.
+///
+/// Embedded Dolt rewrites `manifest` mtime even on `--readonly` commands and `bd export`
+/// while leaving its ~147-byte root-hash content identical. Hashing content instead of
+/// mtime prevents read-only commands and self-exports from triggering watcher loops.
+pub fn dolt_state_token(beads_dir: &Path) -> String {
+    let mut parts: Vec<(String, Vec<u8>)> = Vec::new();
+    for sub in ["embeddeddolt", "dolt"] {
+        let dir = beads_dir.join(sub);
+        if dir.exists() {
+            collect_dolt_markers(&dir, beads_dir, 0, &mut parts);
+        }
+    }
+    if parts.is_empty() {
+        return String::new();
+    }
+    parts.sort_by(|a, b| a.0.cmp(&b.0));
+    let mut hash: u64 = 0xcbf29ce484222325;
+    for (rel, bytes) in parts {
+        for &b in rel.as_bytes() {
+            hash ^= u64::from(b);
+            hash = hash.wrapping_mul(0x100000001b3);
+        }
+        hash ^= 0xff;
+        hash = hash.wrapping_mul(0x100000001b3);
+        for &b in &bytes {
+            hash ^= u64::from(b);
+            hash = hash.wrapping_mul(0x100000001b3);
+        }
+    }
+    format!("{hash:016x}")
+}
+
+fn collect_dolt_markers(
+    dir: &Path,
+    beads_root: &Path,
+    depth: usize,
+    out: &mut Vec<(String, Vec<u8>)>,
+) {
+    if depth > 5 {
+        return;
+    }
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let name = entry.file_name().to_string_lossy().to_string();
+        if path.is_dir() {
+            if !name.eq_ignore_ascii_case("tempfiles")
+                && !name.eq_ignore_ascii_case("temptf")
+                && !name.eq_ignore_ascii_case("stats")
+            {
+                collect_dolt_markers(&path, beads_root, depth + 1, out);
+            }
+        } else if name == "manifest" || name == "HEAD" {
+            if let Ok(bytes) = fs::read(&path) {
+                let rel = path
+                    .strip_prefix(beads_root)
+                    .unwrap_or(&path)
+                    .to_string_lossy()
+                    .replace('\\', "/");
+                out.push((rel, bytes));
+            }
+        }
+    }
+}
+
 pub fn latest_dolt_mtime_ms(beads_dir: &Path) -> u128 {
     let mut latest = 0_u128;
     for sub in ["embeddeddolt", "dolt"] {
@@ -93,7 +171,10 @@ fn scan_dolt_mtimes(dir: &Path, depth: usize, latest: &mut u128) {
         let path = entry.path();
         let name = entry.file_name().to_string_lossy().to_string();
         if path.is_dir() {
-            if name != "tempfiles" && name != "stats" {
+            if !name.eq_ignore_ascii_case("tempfiles")
+                && !name.eq_ignore_ascii_case("temptf")
+                && !name.eq_ignore_ascii_case("stats")
+            {
                 scan_dolt_mtimes(&path, depth + 1, latest);
             }
         } else if name == "manifest" || name == "HEAD" {
@@ -122,11 +203,12 @@ pub fn compute_fingerprint(beads_dir: &Path, module_prefix: &str) -> String {
         return "missing".to_string();
     }
     let jsonl = beads_dir.join("issues.jsonl");
-    let jsonl_meta = fs::metadata(&jsonl).ok();
-    let jsonl_len = jsonl_meta.as_ref().map(|m| m.len()).unwrap_or(0);
-    let jsonl_mt = file_mtime_ms(&jsonl);
-    let dolt_mt = latest_dolt_mtime_ms(beads_dir);
-    format!("{jsonl_len}:{jsonl_mt}:{dolt_mt}:{module_prefix}")
+    let (jsonl_len, jsonl_hash) = match fs::read(&jsonl) {
+        Ok(bytes) => (bytes.len() as u64, fnv1a64(&bytes)),
+        Err(_) => (0, 0),
+    };
+    let dolt_token = dolt_state_token(beads_dir);
+    format!("{jsonl_len}:{jsonl_hash:016x}:{dolt_token}:{module_prefix}")
 }
 
 pub fn parse_jsonl_str(raw: &str) -> Vec<RawIssueRecord> {
@@ -492,5 +574,38 @@ mod tests {
             .expect("blocked");
         assert_eq!(blocked.lane, BoardLane::Blocked);
         assert_eq!(blocked.open_blocked_by, vec!["bl-1.1"]);
+    }
+
+    #[test]
+    fn fingerprint_ignores_identical_manifest_rewrite_and_detects_real_dolt_changes() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let beads = dir.path().join(".beads");
+        let noms = beads.join("embeddeddolt/bl/.dolt/noms");
+        std::fs::create_dir_all(&noms).expect("mkdir");
+        let manifest = noms.join("manifest");
+        let jsonl = beads.join("issues.jsonl");
+
+        let v1 = "5:__DOLT__:lock1:root_hash_aaa:0000:vvvv:100";
+        std::fs::write(&manifest, v1).expect("write manifest");
+        std::fs::write(&jsonl, "{\"id\":\"bl-1\",\"title\":\"A\"}\n").expect("write jsonl");
+
+        let fp1 = compute_fingerprint(&beads, "mod:");
+
+        // Simulate embedded Dolt touching manifest on a --readonly command (same bytes)
+        std::fs::write(&manifest, v1).expect("rewrite identical manifest");
+        let fp2 = compute_fingerprint(&beads, "mod:");
+        assert_eq!(
+            fp1, fp2,
+            "identical manifest rewrite must not change fingerprint"
+        );
+
+        // Simulate a real Dolt write changing root hash
+        let v2 = "5:__DOLT__:lock2:root_hash_bbb:0000:vvvv:101";
+        std::fs::write(&manifest, v2).expect("write updated manifest");
+        let fp3 = compute_fingerprint(&beads, "mod:");
+        assert_ne!(
+            fp1, fp3,
+            "real Dolt root-hash change must update fingerprint"
+        );
     }
 }

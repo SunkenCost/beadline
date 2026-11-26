@@ -242,6 +242,8 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "webview2-com",
+ "windows-core",
 ]
 
 [[package]]

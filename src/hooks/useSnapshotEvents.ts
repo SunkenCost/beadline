@@ -14,8 +14,9 @@ export function useSnapshotEvents() {
 
     void subscribeSnapshotUpdated((snap) => {
       if (!active) return;
-      applySnapshot(snap);
-      void refreshAllActive();
+      if (applySnapshot(snap)) {
+        void refreshAllActive();
+      }
     }).then((fn) => {
       if (!active) fn();
       else unlisteners.push(fn);
@@ -23,8 +24,9 @@ export function useSnapshotEvents() {
 
     void subscribeAllActiveUpdated((items) => {
       if (!active) return;
-      applyAllActive(items);
-      void refreshWorkspaces();
+      if (applyAllActive(items)) {
+        void refreshWorkspaces();
+      }
     }).then((fn) => {
       if (!active) fn();
       else unlisteners.push(fn);

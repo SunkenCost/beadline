@@ -44,19 +44,24 @@ export interface IssueDrawerProps {
 export function IssueDrawer({ modulePrefix, moduleAliases, onRequestClose }: IssueDrawerProps) {
   const t = useT();
   const locale = useSettingsStore((s) => s.settings.language);
-  const { selectedIssueId, openDrawer, closeDrawer, pushToast } = useUiStore();
-  const {
-    activePath,
-    snapshot,
-    byId,
-    updateIssue,
-    reopenIssue,
-    addDependency,
-    removeDependency,
-    addComment,
-  } = useWorkspaceStore();
+  const selectedIssueId = useUiStore((s) => s.selectedIssueId);
+  const openDrawer = useUiStore((s) => s.openDrawer);
+  const closeDrawer = useUiStore((s) => s.closeDrawer);
+  const pushToast = useUiStore((s) => s.pushToast);
+
+  const activePath = useWorkspaceStore((s) => s.activePath);
+  const snapshot = useWorkspaceStore((s) => s.snapshot);
+  const byId = useWorkspaceStore((s) => s.byId);
+  const updateIssue = useWorkspaceStore((s) => s.updateIssue);
+  const reopenIssue = useWorkspaceStore((s) => s.reopenIssue);
+  const addDependency = useWorkspaceStore((s) => s.addDependency);
+  const removeDependency = useWorkspaceStore((s) => s.removeDependency);
+  const addComment = useWorkspaceStore((s) => s.addComment);
 
   const issue = selectedIssueId ? (byId[selectedIssueId] ?? null) : null;
+  const issueId = issue?.id ?? null;
+  const issueUpdatedAt = issue?.updatedAt ?? "";
+  const issueCommentCount = issue?.commentCount ?? 0;
 
   const [titleDraft, setTitleDraft] = useState("");
   const [assigneeDraft, setAssigneeDraft] = useState("");
@@ -84,26 +89,30 @@ export function IssueDrawer({ modulePrefix, moduleAliases, onRequestClose }: Iss
   );
 
   useEffect(() => {
-    if (!issue) return;
-    setTitleDraft(issue.title);
-    setAssigneeDraft(issue.assignee);
-    setLabelsDraft(issue.labels.filter((l) => !l.startsWith(prefix)).join(", "));
-    setDescDraft(issue.description);
-    setAccDraft(issue.acceptanceCriteria);
-    setNotesDraft(issue.notes);
+    if (!issueId) return;
+    const current = useWorkspaceStore.getState().byId[issueId];
+    if (!current || current.updatedAt !== issueUpdatedAt) return;
+    setTitleDraft(current.title);
+    setAssigneeDraft(current.assignee);
+    setLabelsDraft(current.labels.filter((l) => !l.startsWith(prefix)).join(", "));
+    setDescDraft(current.description);
+    setAccDraft(current.acceptanceCriteria);
+    setNotesDraft(current.notes);
     setEditingTexts(false);
     setNewModOpen(false);
     setNewModDraft("");
     setBlockerPick("");
-  }, [issue?.id, issue?.updatedAt, prefix, issue]);
+  }, [issueId, issueUpdatedAt, prefix]);
 
   useEffect(() => {
-    if (!issue || !activePath) {
+    // Skip spawning `bd --readonly comments` when the issue has zero comments,
+    // and depend strictly on primitive identity/count rather than object reference.
+    if (!issueId || !activePath || issueCommentCount === 0) {
       setComments([]);
       return;
     }
     let alive = true;
-    void ipcGetIssueComments(activePath, issue.id)
+    void ipcGetIssueComments(activePath, issueId)
       .then((list) => {
         if (alive) setComments(list);
       })
@@ -113,7 +122,7 @@ export function IssueDrawer({ modulePrefix, moduleAliases, onRequestClose }: Iss
     return () => {
       alive = false;
     };
-  }, [activePath, issue]);
+  }, [activePath, issueId, issueCommentCount]);
 
   const modChoices = useMemo(() => {
     const set = new Set<string>();
