@@ -1,6 +1,6 @@
 export type Locale = "zh-CN" | "en";
 
-export type ThemePresetId = "warm-clay" | "linear-slate" | "pure-mono";
+export type ThemePresetId = "warm-clay" | "cool-slate" | "pure-mono";
 
 export type AppearanceMode = "light" | "dark" | "system";
 

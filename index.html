@@ -8,7 +8,12 @@
       (() => {
         try {
           const rawPreset = localStorage.getItem("beadline:preset");
-          const preset = !rawPreset || rawPreset === "warm-claude" ? "warm-clay" : rawPreset;
+          const preset =
+            !rawPreset || rawPreset === "warm-claude"
+              ? "warm-clay"
+              : rawPreset === "linear-slate"
+                ? "cool-slate"
+                : rawPreset;
           const mode = localStorage.getItem("beadline:appearance") || "system";
           const radius = localStorage.getItem("beadline:radius") || "default";
           const density = localStorage.getItem("beadline:density") || "comfortable";

@@ -10,7 +10,7 @@ Beadline is a fast, open-source, cross-platform (**Windows / macOS / Linux**) de
 
 - **Truly Native & Lightweight**: ~10 MB installer powered by Tauri v2 and system WebView2 / WKWebView — no bundled Electron Chromium, no local Python runtime, no port conflicts.
 - **Zero-Polling Event-Driven Sync**: Rust watches `.beads/` via OS filesystem events (`notify`). Reads parse `.beads/issues.jsonl` in milliseconds without contending with concurrent AI agents writing to Dolt, while writes flow through a serialized `bd` CLI queue.
-- **Calm, Intentional Design**: Default **Warm Clay × Coss UI** aesthetic, plus switchable **Linear Slate** and **Pure Mono** presets (light / dark / system), accent/radius/density controls, and shareable **Theme JSON** import/export.
+- **Calm, Intentional Design**: Default **Warm Clay × Coss UI** aesthetic, plus switchable **Cool Slate** and **Pure Mono** presets (light / dark / system), accent/radius/density controls, and shareable **Theme JSON** import/export.
 - **Multi-Project × Multi-Module**: Switch seamlessly across local repositories, monitor an **All Projects · Active** overview, and slice each repository by configurable module prefixes (default `mod:*`, customizable to `area:*`, `pkg:*`, etc.) with custom aliases and color dots — **zero files written to your Git repos**.
 - **Agent-Native Sweet Spot**:
   - Automatic detection of Git branches, commits, GitHub Issues, local Worktree paths, and custom deep links (e.g., `t3-thread://`).

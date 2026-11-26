@@ -229,7 +229,7 @@ export function IssueDrawer({ modulePrefix, moduleAliases, onRequestClose }: Iss
   const handleReopen = async () => {
     setBusy(true);
     try {
-      await reopenIssue(issue.id, "Reopened in Beadline");
+      await reopenIssue(issue.id, t.drawer.reopenReasonDefault);
       pushToast(t.actions.reopen, "ok");
     } catch (err) {
       pushToast(formatIpcError(err), "err");
@@ -490,7 +490,7 @@ export function IssueDrawer({ modulePrefix, moduleAliases, onRequestClose }: Iss
                     );
                   }
                 }}
-                placeholder="claude / gpt / gemini"
+                placeholder={t.drawer.assigneePlaceholder}
                 className="h-7 rounded-[var(--radius-xs)] border border-[var(--border)] bg-[var(--surface)] px-2 font-mono-tabular text-[12px] text-[var(--fg)]"
               />
             </div>
@@ -513,7 +513,7 @@ export function IssueDrawer({ modulePrefix, moduleAliases, onRequestClose }: Iss
                     void patch({ issueId: issue.id, labels: merged }, t.settings.savedHint);
                   }
                 }}
-                placeholder="wave-1, review"
+                placeholder={t.drawer.labelsPlaceholder}
                 className="h-7 rounded-[var(--radius-xs)] border border-[var(--border)] bg-[var(--surface)] px-2 font-mono-tabular text-[12px] text-[var(--fg)]"
               />
             </div>

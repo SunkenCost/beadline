@@ -1,6 +1,7 @@
 import { Dialog as BaseDialog } from "@base-ui/react/dialog";
 import { X } from "lucide-react";
 import type { ReactNode } from "react";
+import { useT } from "@/i18n";
 import { Button } from "./Button";
 
 export interface DialogProps {
@@ -22,6 +23,7 @@ export function Dialog({
   footer,
   maxWidthClass = "max-w-[600px]",
 }: DialogProps) {
+  const t = useT();
   return (
     <BaseDialog.Root open={open} onOpenChange={onOpenChange}>
       <BaseDialog.Portal>
@@ -42,7 +44,12 @@ export function Dialog({
             </div>
             <BaseDialog.Close
               render={
-                <Button size="icon" variant="ghost" aria-label="Close" className="h-6 w-6">
+                <Button
+                  size="icon"
+                  variant="ghost"
+                  aria-label={t.actions.close}
+                  className="h-6 w-6"
+                >
                   <X className="h-3.5 w-3.5" />
                 </Button>
               }

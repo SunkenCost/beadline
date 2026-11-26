@@ -16,7 +16,8 @@ pub enum ThemePresetId {
     #[default]
     #[serde(alias = "warm-claude")]
     WarmClay,
-    LinearSlate,
+    #[serde(alias = "linear-slate")]
+    CoolSlate,
     PureMono,
 }
 

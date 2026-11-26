@@ -241,7 +241,7 @@ export function CreateIssueModal({
               type="text"
               value={assignee}
               onChange={(e) => setAssignee(e.target.value)}
-              placeholder="claude / gpt / gemini"
+              placeholder={t.drawer.assigneePlaceholder}
               className={fieldCls}
             />
           </div>
@@ -325,7 +325,7 @@ export function CreateIssueModal({
             type="text"
             value={extraLabels}
             onChange={(e) => setExtraLabels(e.target.value)}
-            placeholder="milestone-1, review"
+            placeholder={t.create.labelsPlaceholder}
             className={fieldCls}
           />
         </div>

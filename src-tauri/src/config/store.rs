@@ -252,14 +252,17 @@ mod tests {
         assert_eq!(defaults.theme.preset, ThemePresetId::WarmClay);
         assert!(defaults.use_force_writes);
 
-        // Legacy preset id "warm-claude" migrates seamlessly to WarmClay
-        let legacy: ThemePresetId =
-            serde_json::from_str("\"warm-claude\"").expect("legacy preset alias");
-        assert_eq!(legacy, ThemePresetId::WarmClay);
+        // Legacy preset ids migrate seamlessly to current names
+        let legacy_clay: ThemePresetId =
+            serde_json::from_str("\"warm-claude\"").expect("legacy clay alias");
+        assert_eq!(legacy_clay, ThemePresetId::WarmClay);
+        let legacy_slate: ThemePresetId =
+            serde_json::from_str("\"linear-slate\"").expect("legacy slate alias");
+        assert_eq!(legacy_slate, ThemePresetId::CoolSlate);
 
         let mut updated = defaults;
         updated.language = Locale::En;
-        updated.theme.preset = ThemePresetId::LinearSlate;
+        updated.theme.preset = ThemePresetId::CoolSlate;
         updated.theme.appearance = AppearanceMode::Dark;
         store.save_settings(&updated).expect("save");
 
@@ -274,7 +277,7 @@ mod tests {
 
         let reloaded = store.load_settings();
         assert_eq!(reloaded.language, Locale::En);
-        assert_eq!(reloaded.theme.preset, ThemePresetId::LinearSlate);
+        assert_eq!(reloaded.theme.preset, ThemePresetId::CoolSlate);
         assert_eq!(reloaded.window, Some(geo));
     }
 
