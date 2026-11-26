@@ -4,6 +4,7 @@ import { applyThemeToDocument } from "@/lib/theme";
 import type {
   AppearanceMode,
   AppSettings,
+  BeadlineThemeV1,
   DensityMode,
   Locale,
   PlatformInfo,
@@ -21,6 +22,10 @@ interface SettingsState {
   setAppearance: (appearance: AppearanceMode) => Promise<void>;
   setRadius: (radius: RadiusScale) => Promise<void>;
   setDensity: (density: DensityMode) => Promise<void>;
+  setAccentOverride: (accentOverride: string | null) => Promise<void>;
+  importCustomTheme: (theme: BeadlineThemeV1) => Promise<void>;
+  applyCustomTheme: (id: string | null) => Promise<void>;
+  removeCustomTheme: (id: string) => Promise<void>;
   updateSettings: (patch: Partial<AppSettings>) => Promise<void>;
 }
 
@@ -81,6 +86,45 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     const cur = get().settings;
     await get().updateSettings({
       theme: { ...cur.theme, density },
+    });
+  },
+
+  setAccentOverride: async (accentOverride) => {
+    const cur = get().settings;
+    await get().updateSettings({
+      theme: { ...cur.theme, accentOverride },
+    });
+  },
+
+  importCustomTheme: async (theme) => {
+    const cur = get().settings;
+    const filtered = cur.theme.customThemes.filter((t) => t.id !== theme.id);
+    await get().updateSettings({
+      theme: {
+        ...cur.theme,
+        customThemes: [...filtered, theme],
+        activeCustomThemeId: theme.id,
+      },
+    });
+  },
+
+  applyCustomTheme: async (id) => {
+    const cur = get().settings;
+    await get().updateSettings({
+      theme: { ...cur.theme, activeCustomThemeId: id },
+    });
+  },
+
+  removeCustomTheme: async (id) => {
+    const cur = get().settings;
+    const nextThemes = cur.theme.customThemes.filter((t) => t.id !== id);
+    const nextActive = cur.theme.activeCustomThemeId === id ? null : cur.theme.activeCustomThemeId;
+    await get().updateSettings({
+      theme: {
+        ...cur.theme,
+        customThemes: nextThemes,
+        activeCustomThemeId: nextActive,
+      },
     });
   },
 }));

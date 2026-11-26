@@ -131,3 +131,22 @@ export function parseThemeJson(raw: string): ThemeValidationResult {
 
   return { ok: true, theme };
 }
+
+export function exportCurrentThemeJson(theme: ThemeSettings): string {
+  const style = getComputedStyle(document.documentElement);
+  const tokens: Record<string, string> = {};
+  for (const key of ALLOWED_THEME_TOKEN_KEYS) {
+    const val = style.getPropertyValue(`--${key}`).trim();
+    if (val && isSafeCssColor(val)) {
+      tokens[key] = val;
+    }
+  }
+  const payload: BeadlineThemeV1 = {
+    schemaVersion: 1,
+    id: `custom-${theme.preset}`,
+    name: `Beadline ${theme.preset}`,
+    appearance: theme.appearance,
+    tokens,
+  };
+  return JSON.stringify(payload, null, 2);
+}

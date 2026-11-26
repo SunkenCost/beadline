@@ -63,11 +63,3 @@
   font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;
 }
-
-[data-tauri-drag-region="true"] {
-  -webkit-app-region: drag;
-}
-
-[data-tauri-drag-region="false"] {
-  -webkit-app-region: no-drag;
-}

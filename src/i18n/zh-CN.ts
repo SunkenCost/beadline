@@ -28,6 +28,13 @@ export const zhCN = {
     close: "关闭",
     switchLanguage: "切换语言",
     switchTheme: "外观与主题",
+    openSettings: "打开设置 (Ctrl+,)",
+    reset: "重置",
+    save: "保存",
+    done: "完成",
+    importJson: "导入 Theme JSON",
+    exportJson: "复制当前 Theme JSON",
+    remove: "移除",
   },
   theme: {
     presets: {
@@ -51,14 +58,36 @@ export const zhCN = {
     },
     sectionPreset: "主题预设",
     sectionAppearance: "明暗模式",
+    sectionRadius: "圆角风格",
     sectionDensity: "排版密度",
+    sectionAccent: "强调色微调",
+    sectionCustomThemes: "自定义主题 (Theme JSON)",
+    customThemePlaceholder:
+      '粘贴 BeadlineThemeV1 JSON，例如 {"schemaVersion":1,"id":"nord","name":"Nord","appearance":"dark","tokens":{"bg":"#2e3440","accent":"#88c0d0"}}',
+    copiedThemeJson: "已复制当前主题 JSON 到剪贴板",
+    importedTheme: "已导入并应用主题",
+  },
+  settings: {
+    title: "设置",
+    subtitle: "所有配置保存在系统用户目录，绝不向任何 Git 仓库写入文件",
+    tabAppearance: "外观与主题",
+    tabGeneral: "通用与引擎",
+    languageLabel: "界面语言",
+    languageDesc: "实时切换中英文界面与状态文案",
+    bdPathLabel: "Beads (`bd`) 可执行路径",
+    bdPathPlaceholder: "留空自动探测 PATH / WinGet / Homebrew",
+    forceWritesLabel: "写入时启用 --force",
+    forceWritesDesc: "兼容多 Agent 模型作为执行者（如 gpt / gemini）时的改状态与关单",
+    deepLinksLabel: "允许打开的自定义深链协议",
+    deepLinksDesc: "逗号分隔，如 t3-thread, vscode, cursor（仅白名单协议允许唤起外部应用）",
+    savedHint: "已自动保存",
   },
   status: {
     engineStandby: "内核就绪",
     milestoneHint: "骨架与无边框原生窗口已就绪 · 下一步接入 Rust Beads 混合引擎",
     desktopReadyTitle: "Tauri v2 无边框桌面骨架已就绪",
     desktopReadyDesc:
-      "已内置 Coss UI (@base-ui/react) 原语、三套语义主题（Warm Claude / Linear Slate / Pure Mono）、中英双语与窗口几何记忆。下一步（bl-84n.2）将接入 Rust notify 事件监听引擎并实时读取本地 Beads 仓库。",
+      "已内置 Coss UI (@base-ui/react) 原语、三套语义主题（Warm Claude / Linear Slate / Pure Mono）、中英双语、完整设置页与窗口几何记忆。下一步（bl-84n.2）将接入 Rust notify 事件监听引擎并实时读取本地 Beads 仓库。",
   },
 } as const;
 

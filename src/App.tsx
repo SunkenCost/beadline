@@ -1,5 +1,6 @@
 import { Activity, GitFork, Kanban, Layers, List, Settings } from "lucide-react";
 import { useEffect } from "react";
+import { SettingsModal } from "@/components/settings/SettingsModal";
 import { Titlebar } from "@/components/shell/Titlebar";
 import { TooltipProvider } from "@/components/ui/Tooltip";
 import { useT } from "@/i18n";
@@ -24,7 +25,7 @@ export function App() {
   const hydrate = useSettingsStore((s) => s.hydrate);
   const theme = useSettingsStore((s) => s.settings.theme);
   const platform = useSettingsStore((s) => s.platform);
-  const { activeView, sidebarCollapsed, setActiveView } = useUiStore();
+  const { activeView, sidebarCollapsed, setActiveView, setSettingsOpen } = useUiStore();
 
   useEffect(() => {
     void hydrate();
@@ -38,6 +39,18 @@ export function App() {
     mq.addEventListener("change", sync);
     return () => mq.removeEventListener("change", sync);
   }, [theme]);
+
+  // Global shortcut: Ctrl+, / Cmd+, opens Settings
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === ",") {
+        e.preventDefault();
+        setSettingsOpen(true);
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [setSettingsOpen]);
 
   return (
     <TooltipProvider delay={300}>
@@ -75,20 +88,26 @@ export function App() {
               })}
             </nav>
 
-            <div
-              className={`flex items-center gap-2 border-t border-[var(--border)] px-3 py-2 text-[11px] text-[var(--fg-3)] ${
-                sidebarCollapsed ? "justify-center px-0" : "justify-between"
-              }`}
-            >
-              <div className="flex items-center gap-2">
-                <span className="h-1.5 w-1.5 rounded-full bg-[var(--success)]" />
-                {!sidebarCollapsed && <span>{t.status.engineStandby}</span>}
-              </div>
-              {!sidebarCollapsed && (
-                <span className="inline-flex items-center gap-1 font-mono-tabular text-[10.5px]">
-                  <Settings className="h-3 w-3" />v{platform.version}
+            <div className="border-t border-[var(--border)] p-1.5">
+              <button
+                type="button"
+                onClick={() => setSettingsOpen(true)}
+                title={t.actions.openSettings}
+                className={`flex h-7 w-full items-center gap-2 rounded-[var(--radius-sm)] px-2 text-[11.5px] text-[var(--fg-2)] transition-colors hover:bg-[var(--surface-hover)] hover:text-[var(--fg)] cursor-pointer ${
+                  sidebarCollapsed ? "justify-center px-0" : "justify-between"
+                }`}
+              >
+                <span className="inline-flex items-center gap-2">
+                  <Settings className="h-3.5 w-3.5 shrink-0" />
+                  {!sidebarCollapsed && <span>{t.nav.settings}</span>}
                 </span>
-              )}
+                {!sidebarCollapsed && (
+                  <span className="inline-flex items-center gap-1.5 font-mono-tabular text-[10.5px] text-[var(--fg-3)]">
+                    <span className="h-1.5 w-1.5 rounded-full bg-[var(--success)]" />v
+                    {platform.version}
+                  </span>
+                )}
+              </button>
             </div>
           </aside>
 
@@ -116,6 +135,8 @@ export function App() {
             </div>
           </main>
         </div>
+
+        <SettingsModal />
       </div>
     </TooltipProvider>
   );

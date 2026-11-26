@@ -1,8 +1,8 @@
 import { Popover as BasePopover } from "@base-ui/react/popover";
-import type { ReactNode } from "react";
+import type { ReactElement, ReactNode } from "react";
 
 export interface PopoverProps {
-  trigger: ReactNode;
+  trigger: ReactElement;
   children: ReactNode;
   align?: "start" | "center" | "end";
   sideOffset?: number;
@@ -18,7 +18,7 @@ export function Popover({
 }: PopoverProps) {
   return (
     <BasePopover.Root>
-      <BasePopover.Trigger render={<span className="inline-flex" />}>{trigger}</BasePopover.Trigger>
+      <BasePopover.Trigger render={trigger} />
       <BasePopover.Portal>
         <BasePopover.Positioner align={align} sideOffset={sideOffset} className="z-50">
           <BasePopover.Popup

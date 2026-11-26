@@ -1,4 +1,15 @@
-import { Languages, Minus, Monitor, Moon, Palette, PanelLeft, Square, Sun, X } from "lucide-react";
+import {
+  Languages,
+  Minus,
+  Monitor,
+  Moon,
+  Palette,
+  PanelLeft,
+  Settings,
+  Square,
+  Sun,
+  X,
+} from "lucide-react";
 import { Button } from "@/components/ui/Button";
 import { Popover } from "@/components/ui/Popover";
 import { Tooltip } from "@/components/ui/Tooltip";
@@ -26,23 +37,18 @@ export function Titlebar() {
   const { settings, platform, setLanguage, setThemePreset, setAppearance, setDensity } =
     useSettingsStore();
   const toggleSidebar = useUiStore((s) => s.toggleSidebar);
+  const setSettingsOpen = useUiStore((s) => s.setSettingsOpen);
 
   const isMac = platform.os === "macos";
 
   return (
-    <header
-      data-tauri-drag-region="true"
-      className="flex h-10 shrink-0 items-center border-b border-[var(--border)] bg-[var(--sidebar)] select-none"
-    >
-      {/* Left: macOS traffic-light safe inset + Brand mark + Sidebar toggle */}
-      <div
-        className={`flex items-center gap-2 px-3 ${isMac ? "pl-[76px]" : ""}`}
-        data-tauri-drag-region="false"
-      >
-        <div className="flex items-center gap-2">
+    <header className="flex h-10 shrink-0 items-center border-b border-[var(--border)] bg-[var(--sidebar)] select-none">
+      {/* Left: non-interactive brand area (draggable) + sidebar toggle button */}
+      <div className={`flex h-full items-center gap-2 px-3 ${isMac ? "pl-[76px]" : ""}`}>
+        <div data-tauri-drag-region className="flex h-full items-center gap-2 pr-1 cursor-default">
           <span
             aria-hidden="true"
-            className="grid h-4.5 w-4.5 place-items-center rounded-[4px] bg-[var(--accent)] text-white"
+            className="grid h-4.5 w-4.5 place-items-center rounded-[4px] bg-[var(--accent)] text-white pointer-events-none"
           >
             <svg width="10" height="10" viewBox="0 0 24 24" fill="none" aria-hidden="true">
               <path
@@ -56,7 +62,7 @@ export function Titlebar() {
               <circle cx="12" cy="17" r="2.8" fill="currentColor" />
             </svg>
           </span>
-          <span className="text-[12.5px] font-semibold tracking-tight text-[var(--fg)]">
+          <span className="text-[12.5px] font-semibold tracking-tight text-[var(--fg)] pointer-events-none">
             {t.appName}
           </span>
         </div>
@@ -74,11 +80,11 @@ export function Titlebar() {
         </Tooltip>
       </div>
 
-      {/* Center drag spacer */}
-      <div className="flex-1 h-full" data-tauri-drag-region="true" />
+      {/* Dedicated center drag spacer — only this & brand area carry data-tauri-drag-region */}
+      <div className="h-full flex-1" data-tauri-drag-region />
 
-      {/* Right: Language toggle + Theme Popover + Native Windows/Linux Caption Controls */}
-      <div className="flex items-center gap-1 pr-1.5" data-tauri-drag-region="false">
+      {/* Right: Language toggle + Theme Popover + Settings + Native Windows/Linux Caption Controls */}
+      <div className="flex items-center gap-1 pr-1.5">
         <Tooltip label={t.actions.switchLanguage}>
           <Button
             size="sm"
@@ -100,6 +106,7 @@ export function Titlebar() {
               size="icon"
               variant="ghost"
               aria-label={t.actions.switchTheme}
+              title={t.actions.switchTheme}
               className="h-6 w-6"
             >
               <Palette className="h-3.5 w-3.5" />
@@ -113,7 +120,8 @@ export function Titlebar() {
               </div>
               <div className="flex flex-col gap-0.5">
                 {THEME_PRESETS.map((p) => {
-                  const active = settings.theme.preset === p.id;
+                  const active =
+                    !settings.theme.activeCustomThemeId && settings.theme.preset === p.id;
                   return (
                     <button
                       key={p.id}
@@ -188,6 +196,18 @@ export function Titlebar() {
             </div>
           </div>
         </Popover>
+
+        <Tooltip label={t.actions.openSettings}>
+          <Button
+            size="icon"
+            variant="ghost"
+            aria-label={t.actions.openSettings}
+            onClick={() => setSettingsOpen(true)}
+            className="h-6 w-6"
+          >
+            <Settings className="h-3.5 w-3.5" />
+          </Button>
+        </Tooltip>
 
         {!isMac && (
           <div className="ml-1.5 flex items-center border-l border-[var(--border)] pl-1.5">
