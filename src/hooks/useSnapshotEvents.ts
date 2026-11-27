@@ -5,7 +5,7 @@ import {
   subscribeSnapshotUpdated,
   subscribeWindowFocused,
 } from "@/lib/ipc";
-import { useRadarStore } from "@/stores/useRadarStore";
+import { sameWorkspacePath, useRadarStore } from "@/stores/useRadarStore";
 import { useUiStore } from "@/stores/useUiStore";
 import { useWorkspaceStore } from "@/stores/useWorkspaceStore";
 
@@ -38,7 +38,7 @@ export function useSnapshotEvents() {
     void subscribeRadarUpdated((radar) => {
       if (!active) return;
       const activePath = useWorkspaceStore.getState().activePath;
-      if (!activePath || radar.repoPath.toLowerCase() === activePath.toLowerCase()) {
+      if (!activePath || sameWorkspacePath(radar.repoPath, activePath)) {
         applyRadar(radar);
       }
     }).then((fn) => {

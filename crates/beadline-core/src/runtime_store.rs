@@ -216,7 +216,7 @@ pub fn apply_hook_event(
                     .unwrap_or_else(|| "Agent asked a question and is awaiting your answer".into());
                 let req_id = input
                     .request_id
-                    .unwrap_or_else(|| format!("req_{:012x}", fnv1a64(reason.as_bytes())));
+                    .unwrap_or_else(|| format!("bl_req_{:012x}", fnv1a64(reason.as_bytes())));
                 lease.state = SessionState::WaitingHuman;
                 lease.turn_state = TurnState::WaitingHuman;
                 lease.waiting_reason = Some(reason.clone());
@@ -229,17 +229,23 @@ pub fn apply_hook_event(
                     tool_name: tool.clone(),
                 });
             } else {
-                // Tool execution actually started -> any previous approval prompt was resolved
-                if lease
+                // Tool execution started -> clear approval ONLY when correlated by request_id
+                // (or by tool_name if the pending request had a synthetic id / no request_id).
+                let should_clear = lease
                     .pending_request
                     .as_ref()
-                    .is_some_and(|r| r.kind == PendingRequestKind::Approval)
-                {
+                    .filter(|req| req.kind == PendingRequestKind::Approval)
+                    .is_some_and(|req| {
+                        pending_matches_tool_event(req, input.request_id.as_deref(), tool.as_deref())
+                    });
+                if should_clear {
                     lease.pending_request = None;
                     lease.waiting_reason = None;
                 }
-                lease.state = SessionState::Working;
-                lease.turn_state = TurnState::Running;
+                if lease.pending_request.is_none() {
+                    lease.state = SessionState::Working;
+                    lease.turn_state = TurnState::Running;
+                }
                 if let Some(s) = input.summary.filter(|s| !s.trim().is_empty()) {
                     lease.summary = s;
                 } else if let Some(t) = &tool {
@@ -250,15 +256,16 @@ pub fn apply_hook_event(
             lease.last_progress_at = now_iso;
         }
         HookEventKind::PostToolUse => {
-            // Tool completed -> clear any matching approval or question request for this tool
-            let clear_pending = match (&lease.pending_request, &input.request_id) {
-                (Some(req), Some(rid)) => req.request_id == *rid || req.kind == PendingRequestKind::Approval,
-                (Some(req), None) => {
-                    req.kind == PendingRequestKind::Approval
-                        || req.tool_name.is_some() && req.tool_name == input.tool_name
-                }
-                (None, _) => false,
-            };
+            // Only clear pending_request when correlated by request_id (or by tool_name when
+            // the pending request used a synthetic id / omitted request_id).
+            // Never allow an unrelated tool completion (req-B) to clear an active approval (req-A)!
+            let clear_pending = lease.pending_request.as_ref().is_some_and(|req| {
+                pending_matches_tool_event(
+                    req,
+                    input.request_id.as_deref(),
+                    input.tool_name.as_deref(),
+                )
+            });
             if clear_pending {
                 lease.pending_request = None;
                 lease.waiting_reason = None;
@@ -289,7 +296,7 @@ pub fn apply_hook_event(
                 });
             let req_id = input
                 .request_id
-                .unwrap_or_else(|| format!("perm_{:012x}", fnv1a64(reason.as_bytes())));
+                .unwrap_or_else(|| format!("bl_perm_{:012x}", fnv1a64(reason.as_bytes())));
             lease.state = SessionState::WaitingHuman;
             lease.turn_state = TurnState::WaitingHuman;
             lease.waiting_reason = Some(reason.clone());
@@ -312,9 +319,25 @@ pub fn apply_hook_event(
                 .or(input.summary)
                 .filter(|s| !s.trim().is_empty())
                 .unwrap_or_else(|| "Waiting for human input".into());
+            // If an Approval prompt is ALREADY pending (e.g. Claude Code fires PermissionRequest
+            // followed immediately by Notification(permission_prompt)), enrich its reason without
+            // clobbering its Approval kind, request_id, or tool_name so PostToolUse/Stop still clears it!
+            if let Some(existing) = lease.pending_request.as_mut() {
+                if existing.kind == PendingRequestKind::Approval {
+                    if !reason.is_empty() && existing.reason.len() < reason.len() {
+                        existing.reason = reason.clone();
+                    }
+                    lease.waiting_reason = Some(existing.reason.clone());
+                    lease.state = SessionState::WaitingHuman;
+                    lease.turn_state = TurnState::WaitingHuman;
+                    lease.last_progress_at = now_iso;
+                    write_lease_file(&path, &lease)?;
+                    return Ok(Some(lease));
+                }
+            }
             let req_id = input
                 .request_id
-                .unwrap_or_else(|| format!("notif_{:012x}", fnv1a64(reason.as_bytes())));
+                .unwrap_or_else(|| format!("bl_notif_{:012x}", fnv1a64(reason.as_bytes())));
             lease.state = SessionState::WaitingHuman;
             lease.turn_state = TurnState::WaitingHuman;
             lease.waiting_reason = Some(reason.clone());
@@ -356,6 +379,29 @@ pub fn apply_hook_event(
 
     write_lease_file(&path, &lease)?;
     Ok(Some(lease))
+}
+
+fn is_synthetic_request_id(id: &str) -> bool {
+    id.starts_with("bl_perm_") || id.starts_with("bl_notif_") || id.starts_with("bl_req_")
+}
+
+fn pending_matches_tool_event(
+    req: &PendingHumanRequest,
+    request_id: Option<&str>,
+    tool_name: Option<&str>,
+) -> bool {
+    match request_id {
+        Some(rid) => {
+            if req.request_id == rid {
+                true
+            } else if is_synthetic_request_id(&req.request_id) {
+                req.tool_name.is_some() && req.tool_name.as_deref() == tool_name
+            } else {
+                false
+            }
+        }
+        None => req.tool_name.is_some() && req.tool_name.as_deref() == tool_name,
+    }
 }
 
 /// Upserts a per-session lease when an agent claims a task via MCP or CLI.
@@ -881,7 +927,73 @@ mod tests {
         assert!(at_60m[0].pending_request.is_some());
         assert_eq!(at_60m[0].reachability, SessionReachability::Unconfirmed);
 
-        // PostToolUse resolves the approval cleanly
+        // Notification(permission_prompt) immediately after PermissionRequest MUST preserve
+        // Approval kind & original request_id so PostToolUse/Stop clears it cleanly!
+        apply_hook_event(
+            &rt,
+            HookEventInput {
+                session_id: "claude_run1".into(),
+                worktree_id: "wt_1".into(),
+                worktree_path: "/repo".into(),
+                branch: Some("feat/tests".into()),
+                harness: "claude-code".into(),
+                agent: "claude".into(),
+                event: HookEventKind::NotificationWait,
+                tool_name: None,
+                request_id: None,
+                summary: None,
+                waiting_reason: Some("Claude needs your permission to run Bash".into()),
+            },
+        )
+        .unwrap();
+        let after_notif = list_leases(&rt).unwrap();
+        let pend = after_notif[0].pending_request.as_ref().expect("still pending");
+        assert_eq!(pend.kind, PendingRequestKind::Approval);
+        assert_eq!(pend.request_id, "perm_99");
+
+        // Unrelated PostToolUse (different request_id) MUST NOT clear perm_99!
+        apply_hook_event(
+            &rt,
+            HookEventInput {
+                session_id: "claude_run1".into(),
+                worktree_id: "wt_1".into(),
+                worktree_path: "/repo".into(),
+                branch: Some("feat/tests".into()),
+                harness: "claude-code".into(),
+                agent: "claude".into(),
+                event: HookEventKind::PostToolUse,
+                tool_name: Some("Read".into()),
+                request_id: Some("unrelated_req".into()),
+                summary: Some("Read completed".into()),
+                waiting_reason: None,
+            },
+        )
+        .unwrap();
+        let after_unrelated = list_leases(&rt).unwrap();
+        assert!(after_unrelated[0].pending_request.is_some());
+
+        // Even an unrelated PreToolUse for the SAME tool name with a different real request_id
+        // MUST NOT clear an explicitly-identified pending approval (real_perm_99)!
+        apply_hook_event(
+            &rt,
+            HookEventInput {
+                session_id: "claude_run1".into(),
+                worktree_id: "wt_1".into(),
+                worktree_path: "/repo".into(),
+                branch: Some("feat/tests".into()),
+                harness: "claude-code".into(),
+                agent: "claude".into(),
+                event: HookEventKind::PreToolUse,
+                tool_name: Some("Bash".into()),
+                request_id: Some("other_bash_call".into()),
+                summary: None,
+                waiting_reason: None,
+            },
+        )
+        .unwrap();
+        assert!(list_leases(&rt).unwrap()[0].pending_request.is_some());
+
+        // Matching PostToolUse resolves perm_99 cleanly
         apply_hook_event(
             &rt,
             HookEventInput {

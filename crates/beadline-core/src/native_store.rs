@@ -459,22 +459,23 @@ pub fn finish_issue_in(
         let cur_rev = read_issue_rev(obj);
         let bl_meta = get_beadline_meta(obj);
 
-        // Idempotent replay check via operationId
+        // Idempotent replay check via operationId — returns original persisted unblocked list
         if let Some(op_id) = &clean_op {
-            let prev_op = bl_meta
+            let prev_proof = bl_meta
                 .get("proof")
-                .and_then(|p| p.get("operationId"))
-                .and_then(Value::as_str);
-            if prev_op == Some(op_id.as_str())
-                && obj.get("status").and_then(Value::as_str) == Some("closed")
-            {
-                return Ok(FinishResult {
-                    id: issue_id.to_string(),
-                    status: "closed".into(),
-                    rev: cur_rev,
-                    idempotent_replay: true,
-                    unblocked: Vec::new(),
-                });
+                .and_then(|p| serde_json::from_value::<IssueProof>(p.clone()).ok());
+            if let Some(proof) = prev_proof {
+                if proof.operation_id.as_deref() == Some(op_id.as_str())
+                    && obj.get("status").and_then(Value::as_str) == Some("closed")
+                {
+                    return Ok(FinishResult {
+                        id: issue_id.to_string(),
+                        status: "closed".into(),
+                        rev: cur_rev,
+                        idempotent_replay: true,
+                        unblocked: proof.unblocked,
+                    });
+                }
             }
         }
 
@@ -488,6 +489,18 @@ pub fn finish_issue_in(
             }
         }
 
+        obj.insert("status".into(), Value::String("closed".into()));
+        obj.insert("closed_at".into(), Value::String(now.clone()));
+        obj.insert("updated_at".into(), Value::String(now.clone()));
+        obj.insert("close_reason".into(), Value::String(clean_summary.to_string()));
+    }
+
+    let post_statuses = collect_status_map(&lines);
+    let unblocked = compute_newly_unblocked(&lines, issue_id, &pre_statuses, &post_statuses);
+
+    if let JsonlLine::Issue(obj) = &mut lines[idx] {
+        let cur_rev = read_issue_rev(obj);
+        let bl_meta = get_beadline_meta(obj);
         let clean_refs: Vec<String> = dedup_strings(
             proof_refs
                 .iter()
@@ -498,9 +511,10 @@ pub fn finish_issue_in(
             summary: clean_summary.to_string(),
             refs: clean_refs,
             operation_id: clean_op,
-            submitted_at: now.clone(),
+            submitted_at: now,
             session_id: session_id.map(String::from),
             actor: Some(actor),
+            unblocked: unblocked.clone(),
         };
 
         let next_rev = cur_rev + 1;
@@ -513,15 +527,7 @@ pub fn finish_issue_in(
                 .map_err(|e| CoreError::Internal(format!("failed to serialize proof: {e}")))?,
         );
         set_beadline_meta(obj, next_bl);
-
-        obj.insert("status".into(), Value::String("closed".into()));
-        obj.insert("closed_at".into(), Value::String(now.clone()));
-        obj.insert("updated_at".into(), Value::String(now));
-        obj.insert("close_reason".into(), Value::String(clean_summary.to_string()));
     }
-
-    let post_statuses = collect_status_map(&lines);
-    let unblocked = compute_newly_unblocked(&lines, issue_id, &pre_statuses, &post_statuses);
 
     save_jsonl_lines(store_dir, &lines, Some(issue_id))?;
 
@@ -896,6 +902,16 @@ pub fn export_jsonl_from_store(
         return Err(CoreError::NotInitialized);
     }
 
+    // P0 safety guard: NEVER allow exporting over the authoritative store's own issues.jsonl
+    // (even with --force), because bd-v1 export strips metadata.beadline (rev/scope/proof).
+    let auth_jsonl = loc.issues_jsonl_path();
+    if is_same_file_target(dest_path, &auth_jsonl) {
+        return Err(CoreError::InvalidOperation(format!(
+            "refusing to export over authoritative Beadline store {}; choose a separate exchange path",
+            auth_jsonl.display()
+        )));
+    }
+
     if dest_path.exists() && !force {
         if let Some(expected_digest) = read_exchange_baseline(&loc.store_dir, dest_path) {
             let current_bytes = fs::read(dest_path)
@@ -907,6 +923,11 @@ pub fn export_jsonl_from_store(
                     dest_path.display()
                 )));
             }
+        } else {
+            return Err(CoreError::InvalidOperation(format!(
+                "destination {} already exists with no recorded Beadline exchange baseline; inspect or pass --force",
+                dest_path.display()
+            )));
         }
     }
 
@@ -1208,6 +1229,24 @@ fn compute_newly_unblocked(
         }
     }
     result
+}
+
+fn is_same_file_target(a: &Path, b: &Path) -> bool {
+    let key_a = crate::fs_util::canonical_path_key(a);
+    let key_b = crate::fs_util::canonical_path_key(b);
+    if key_a == key_b {
+        return true;
+    }
+    // Also compare canonical parent + filename in case one file doesn't exist yet
+    if let (Some(pa), Some(fa), Some(pb), Some(fb)) = (a.parent(), a.file_name(), b.parent(), b.file_name()) {
+        if crate::fs_util::canonical_path_key(pa) == crate::fs_util::canonical_path_key(pb) {
+            #[cfg(windows)]
+            return fa.to_string_lossy().eq_ignore_ascii_case(&fb.to_string_lossy());
+            #[cfg(not(windows))]
+            return fa == fb;
+        }
+    }
+    false
 }
 
 fn record_exchange_baseline(store_dir: &Path, path: &Path, digest: &str) -> CoreResult<()> {
@@ -1533,7 +1572,7 @@ mod tests {
         assert_eq!(res.unblocked.len(), 1);
         assert_eq!(res.unblocked[0].id, b);
 
-        // Replay with same operationId succeeds idempotently without bumping rev
+        // Replay with same operationId succeeds idempotently AND preserves original unblocked list
         let replay = finish_issue_in(
             &loc.store_dir,
             &a,
@@ -1546,6 +1585,8 @@ mod tests {
         .unwrap();
         assert!(replay.idempotent_replay);
         assert_eq!(replay.rev, 2);
+        assert_eq!(replay.unblocked.len(), 1);
+        assert_eq!(replay.unblocked[0].id, b);
     }
 
     #[test]
@@ -1604,5 +1645,18 @@ mod tests {
         fs::write(&exchange_file, "{\"id\":\"external\"}\n").unwrap();
         assert!(export_jsonl_from_store(dir.path(), &exchange_file, "bd-v1", false).is_err());
         assert!(export_jsonl_from_store(dir.path(), &exchange_file, "bd-v1", true).is_ok());
+
+        // P0 safety: exporting over the authoritative store itself MUST ALWAYS be refused (even with --force)
+        let loc = RepoLocator::locate(dir.path()).unwrap();
+        let auth_file = loc.issues_jsonl_path();
+        assert!(export_jsonl_from_store(dir.path(), &auth_file, "bd-v1", false).is_err());
+        assert!(export_jsonl_from_store(dir.path(), &auth_file, "bd-v1", true).is_err());
+
+        // Untracked existing file with no baseline MUST be refused without --force
+        let untracked = dir.path().join("other.jsonl");
+        fs::write(&untracked, "{\"id\":\"keep-me\"}\n").unwrap();
+        assert!(export_jsonl_from_store(dir.path(), &untracked, "bd-v1", false).is_err());
+        assert_eq!(fs::read_to_string(&untracked).unwrap(), "{\"id\":\"keep-me\"}\n");
+        assert!(export_jsonl_from_store(dir.path(), &untracked, "bd-v1", true).is_ok());
     }
 }

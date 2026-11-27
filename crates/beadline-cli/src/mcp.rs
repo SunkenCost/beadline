@@ -14,6 +14,33 @@ use std::path::PathBuf;
 
 const SERVER_NAME: &str = "beadline";
 const PROTOCOL_VERSION: &str = "2025-03-26";
+const SUPPORTED_PROTOCOL_VERSIONS: &[&str] = &[
+    "2025-11-25",
+    "2025-06-18",
+    "2025-03-26",
+    "2024-11-05",
+];
+
+fn negotiate_protocol_version(requested: Option<&str>) -> &'static str {
+    if let Some(req) = requested {
+        if let Some(&matched) = SUPPORTED_PROTOCOL_VERSIONS.iter().find(|&&v| v == req) {
+            return matched;
+        }
+    }
+    PROTOCOL_VERSION
+}
+
+fn is_valid_jsonrpc_id(val: &Value) -> bool {
+    matches!(val, Value::String(_) | Value::Number(_) | Value::Null)
+}
+
+fn invalid_jsonrpc_request(id: Value, message: impl Into<String>) -> Option<Value> {
+    Some(json!({
+        "jsonrpc": "2.0",
+        "id": id,
+        "error": { "code": -32600, "message": message.into() }
+    }))
+}
 
 pub struct McpServer {
     repo_root: PathBuf,
@@ -78,24 +105,63 @@ impl McpServer {
     }
 
     pub fn handle_jsonrpc(&mut self, req: &Value) -> Option<Value> {
-        let id = req.get("id").cloned();
-        let method = req.get("method").and_then(Value::as_str).unwrap_or("");
-        let params = req.get("params").cloned().unwrap_or(Value::Null);
+        let Some(obj) = req.as_object() else {
+            return invalid_jsonrpc_request(Value::Null, "Invalid Request: expected JSON object");
+        };
 
-        // Notifications have no `id` and expect no reply
-        if id.is_none() || method.starts_with("notifications/") {
-            return None;
+        // Per JSON-RPC 2.0, `id` if present MUST be a string, number, or null (never object/array/bool).
+        let id = match obj.get("id") {
+            Some(raw_id) if is_valid_jsonrpc_id(raw_id) => Some(raw_id.clone()),
+            Some(_) => {
+                return invalid_jsonrpc_request(
+                    Value::Null,
+                    "Invalid Request: 'id' must be a string, number, or null",
+                );
+            }
+            None => None,
+        };
+
+        let jsonrpc = obj.get("jsonrpc").and_then(Value::as_str);
+        if jsonrpc != Some("2.0") {
+            return invalid_jsonrpc_request(
+                id.unwrap_or(Value::Null),
+                "Invalid Request: 'jsonrpc' must be \"2.0\"",
+            );
         }
-        let id = id.unwrap_or(Value::Null);
+
+        let Some(method) = obj
+            .get("method")
+            .and_then(Value::as_str)
+            .filter(|m| !m.is_empty())
+        else {
+            return invalid_jsonrpc_request(
+                id.unwrap_or(Value::Null),
+                "Invalid Request: missing or invalid 'method'",
+            );
+        };
+
+        let params = match obj.get("params") {
+            None | Some(Value::Null) => Value::Null,
+            Some(v @ (Value::Object(_) | Value::Array(_))) => v.clone(),
+            Some(_) => {
+                return Some(json!({
+                    "jsonrpc": "2.0",
+                    "id": id.unwrap_or(Value::Null),
+                    "error": { "code": -32602, "message": "Invalid params: expected object or array" }
+                }));
+            }
+        };
+
+        // Valid JSON-RPC 2.0 notifications omit `id` and expect no reply
+        let id = id?;
 
         let result = match method {
             "initialize" => {
-                let client_proto = params
-                    .get("protocolVersion")
-                    .and_then(Value::as_str)
-                    .unwrap_or(PROTOCOL_VERSION);
+                let negotiated = negotiate_protocol_version(
+                    params.get("protocolVersion").and_then(Value::as_str),
+                );
                 Ok(json!({
-                    "protocolVersion": client_proto,
+                    "protocolVersion": negotiated,
                     "capabilities": {
                         "tools": { "listChanged": false }
                     },
@@ -881,5 +947,166 @@ mod tests {
         assert_eq!(responses[4]["result"]["isError"], false);
         assert_eq!(responses[5]["result"]["isError"], false);
         assert_eq!(responses[5]["result"]["structuredContent"]["status"], "closed");
+    }
+
+    #[test]
+    fn mcp_validates_jsonrpc_and_negotiates_protocol_version() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        init_native_workspace(dir.path(), "mcp").unwrap();
+        let mut server = McpServer::new(
+            dir.path().to_path_buf(),
+            Some("codex".into()),
+            Some("gpt".into()),
+            Some("ses_proto".into()),
+        )
+        .unwrap();
+
+        // Empty object MUST return -32600, never be silently swallowed as a notification
+        let r_empty = server.handle_jsonrpc(&json!({})).expect("error response");
+        assert_eq!(r_empty["error"]["code"], -32600);
+
+        // JSON-RPC 1.0 MUST be rejected with -32600
+        let r_v1 = server
+            .handle_jsonrpc(&json!({"jsonrpc":"1.0","id":1,"method":"ping"}))
+            .expect("error response");
+        assert_eq!(r_v1["error"]["code"], -32600);
+        assert_eq!(r_v1["id"], 1);
+
+        // Object id MUST be rejected with -32600 and id: null
+        let r_obj_id = server
+            .handle_jsonrpc(&json!({"jsonrpc":"2.0","id":{"bad":true},"method":"ping"}))
+            .expect("error response");
+        assert_eq!(r_obj_id["error"]["code"], -32600);
+        assert_eq!(r_obj_id["id"], Value::Null);
+
+        // Unsupported future MCP protocol version MUST negotiate down to supported version
+        let r_init = server
+            .handle_jsonrpc(&json!({
+                "jsonrpc": "2.0",
+                "id": 2,
+                "method": "initialize",
+                "params": { "protocolVersion": "9999-01-01" }
+            }))
+            .expect("init response");
+        assert_eq!(r_init["result"]["protocolVersion"], PROTOCOL_VERSION);
+
+        // Supported version echoes cleanly
+        let r_init_ok = server
+            .handle_jsonrpc(&json!({
+                "jsonrpc": "2.0",
+                "id": 3,
+                "method": "initialize",
+                "params": { "protocolVersion": "2025-06-18" }
+            }))
+            .expect("init response");
+        assert_eq!(r_init_ok["result"]["protocolVersion"], "2025-06-18");
+
+        // Valid JSON-RPC 2.0 notification produces NO reply
+        assert!(server
+            .handle_jsonrpc(&json!({"jsonrpc":"2.0","method":"notifications/initialized"}))
+            .is_none());
+    }
+
+    #[test]
+    fn mcp_finish_idempotent_replay_preserves_unblocked_tasks() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        init_native_workspace(dir.path(), "rep").unwrap();
+        let blocker = create_issue_native(
+            dir.path(),
+            &CreateIssueRequest {
+                workspace_path: dir.path().to_string_lossy().into(),
+                title: "Upstream schema".into(),
+                issue_type: "task".into(),
+                priority: 1,
+                status: "open".into(),
+                assignee: None,
+                parent_id: None,
+                labels: vec![],
+                description: None,
+                acceptance_criteria: None,
+                notes: None,
+                scope: vec![],
+                blocked_by: vec![],
+            },
+            "rep",
+        )
+        .unwrap();
+        let downstream = create_issue_native(
+            dir.path(),
+            &CreateIssueRequest {
+                workspace_path: dir.path().to_string_lossy().into(),
+                title: "Downstream handler".into(),
+                issue_type: "task".into(),
+                priority: 2,
+                status: "open".into(),
+                assignee: None,
+                parent_id: None,
+                labels: vec![],
+                description: None,
+                acceptance_criteria: None,
+                notes: None,
+                scope: vec![],
+                blocked_by: vec![blocker.clone()],
+            },
+            "rep",
+        )
+        .unwrap();
+
+        let mut server = McpServer::new(
+            dir.path().to_path_buf(),
+            Some("codex".into()),
+            Some("gpt".into()),
+            Some("ses_rep".into()),
+        )
+        .unwrap();
+
+        let first = server
+            .handle_jsonrpc(&json!({
+                "jsonrpc": "2.0",
+                "id": 10,
+                "method": "tools/call",
+                "params": {
+                    "name": "bl_finish",
+                    "arguments": {
+                        "issueId": blocker,
+                        "operationId": "op-lost-reply-1",
+                        "proof": { "summary": "verified", "refs": ["commit:deadbeef"] }
+                    }
+                }
+            }))
+            .unwrap();
+        assert_eq!(first["result"]["isError"], false);
+        assert_eq!(first["result"]["structuredContent"]["idempotentReplay"], false);
+        let first_unblocked = first["result"]["structuredContent"]["unblocked"]
+            .as_array()
+            .unwrap();
+        assert_eq!(first_unblocked.len(), 1);
+        assert_eq!(first_unblocked[0]["id"], downstream);
+        let rev_after_first = first["result"]["structuredContent"]["rev"].as_u64().unwrap();
+
+        // Retry with the same operationId after simulated lost reply
+        let replay = server
+            .handle_jsonrpc(&json!({
+                "jsonrpc": "2.0",
+                "id": 11,
+                "method": "tools/call",
+                "params": {
+                    "name": "bl_finish",
+                    "arguments": {
+                        "issueId": blocker,
+                        "operationId": "op-lost-reply-1",
+                        "proof": { "summary": "verified", "refs": ["commit:deadbeef"] }
+                    }
+                }
+            }))
+            .unwrap();
+        assert_eq!(replay["result"]["isError"], false);
+        assert_eq!(replay["result"]["structuredContent"]["idempotentReplay"], true);
+        assert_eq!(replay["result"]["structuredContent"]["rev"], rev_after_first);
+        let replay_unblocked = replay["result"]["structuredContent"]["unblocked"]
+            .as_array()
+            .unwrap();
+        assert_eq!(replay_unblocked.len(), 1);
+        assert_eq!(replay_unblocked[0]["id"], downstream);
     }
 }

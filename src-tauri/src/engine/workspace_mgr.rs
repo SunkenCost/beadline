@@ -55,6 +55,7 @@ struct ExportRecord {
 }
 
 struct CachedRadar {
+    generation: u64,
     observed_worktrees: Vec<ObservedWorktree>,
     committed_diff_cache: HashMap<(String, String), Vec<String>>,
     last_snapshot: RadarSnapshot,
@@ -76,6 +77,9 @@ pub struct WorkspaceManager {
     export_in_flight: Mutex<HashMap<String, Arc<AtomicBool>>>,
     export_records: Mutex<HashMap<String, ExportRecord>>,
     git_metadata: Mutex<HashMap<String, GitMetadataSlot>>,
+    /// Per-repo radar serialization lock so concurrent lease updates and Git scans
+    /// never read stale `observed_worktrees` and overwrite a fresher scan.
+    radar_locks: Mutex<HashMap<String, Arc<Mutex<()>>>>,
     /// Single global serialized Git scan worker lock (prevents parallel Git subprocess storms).
     git_scan_lock: Arc<Mutex<()>>,
     radar_cache: Mutex<HashMap<String, CachedRadar>>,
@@ -90,10 +94,18 @@ impl WorkspaceManager {
             export_in_flight: Mutex::new(HashMap::new()),
             export_records: Mutex::new(HashMap::new()),
             git_metadata: Mutex::new(HashMap::new()),
+            radar_locks: Mutex::new(HashMap::new()),
             git_scan_lock: Arc::new(Mutex::new(())),
             radar_cache: Mutex::new(HashMap::new()),
             radar_gen: AtomicU64::new(1),
         }
+    }
+
+    async fn radar_lock_for(&self, repo_id: &str) -> Arc<Mutex<()>> {
+        let mut map = self.radar_locks.lock().await;
+        map.entry(repo_id.to_string())
+            .or_insert_with(|| Arc::new(Mutex::new(())))
+            .clone()
     }
 
     fn resolve_bd(&self, settings: &AppSettings) -> AppResult<PathBuf> {
@@ -407,6 +419,11 @@ impl WorkspaceManager {
             .map_err(|e| AppError::Internal(format!("locator join error: {e}")))??;
 
         let cache_key = loc.repo_id.clone();
+        // Serialize radar computations per repo_id so a lease-only refresh never clobbers
+        // a concurrent full Git scan's fresher `observed_worktrees` or emits out-of-order generations.
+        let repo_radar_lock = self.radar_lock_for(&cache_key).await;
+        let _repo_guard = repo_radar_lock.lock().await;
+
         let (prev_observed, mut committed_cache) = {
             let cache = self.radar_cache.lock().await;
             match cache.get(&cache_key) {
@@ -461,14 +478,20 @@ impl WorkspaceManager {
 
         {
             let mut cache = self.radar_cache.lock().await;
-            cache.insert(
-                cache_key,
-                CachedRadar {
-                    observed_worktrees: observed,
-                    committed_diff_cache: next_committed_cache,
-                    last_snapshot: radar.clone(),
-                },
-            );
+            let should_write = cache
+                .get(&cache_key)
+                .is_none_or(|existing| generation >= existing.generation);
+            if should_write {
+                cache.insert(
+                    cache_key,
+                    CachedRadar {
+                        generation,
+                        observed_worktrees: observed,
+                        committed_diff_cache: next_committed_cache,
+                        last_snapshot: radar.clone(),
+                    },
+                );
+            }
         }
 
         Ok(radar)

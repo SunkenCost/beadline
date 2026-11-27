@@ -21,7 +21,7 @@ struct ActiveWatch {
     path: String,
     _store_watcher: RecommendedWatcher,
     _runtime_watcher: Option<RecommendedWatcher>,
-    _git_meta_watcher: Option<RecommendedWatcher>,
+    _git_meta_watcher: Option<Arc<Mutex<RecommendedWatcher>>>,
     snapshot_task: JoinHandle<()>,
     radar_task: JoinHandle<()>,
     git_radar_task: JoinHandle<()>,
@@ -226,12 +226,20 @@ impl ActiveWatch {
 
         // Lightweight Git ref & worktree metadata watcher (ONLY refs/heads + worktrees + HEAD,
         // never recursive over source files) so commits & branch switches update committed-diff radar!
-        let git_meta_watcher = loc.git_common_dir.as_deref().and_then(|common| {
-            let git_tx_cb = git_tx.clone();
-            watch_git_refs(common, move || {
-                let _ = git_tx_cb.try_send(());
-            })
-        });
+        let git_common_dir = loc.git_common_dir.clone();
+        let (git_meta_watcher, mut worktrees_watched, mut refs_heads_watched) =
+            match git_common_dir.as_deref() {
+                Some(common) => {
+                    let git_tx_cb = git_tx.clone();
+                    match watch_git_refs(common, move || {
+                        let _ = git_tx_cb.try_send(());
+                    }) {
+                        Some((w, wt_ok, refs_ok)) => (Some(Arc::new(Mutex::new(w))), wt_ok, refs_ok),
+                        None => (None, false, false),
+                    }
+                }
+                None => (None, false, false),
+            };
 
         let watch_path_snap = path.clone();
         let mgr_snap = Arc::clone(&workspace_mgr);
@@ -282,10 +290,36 @@ impl ActiveWatch {
 
         // Debounced Git ref/worktree refresh channel (updates committed + dirty overlap truth on commit/branch switch)
         let watch_path_git = path.clone();
+        let git_watcher_handle = git_meta_watcher.as_ref().map(Arc::clone);
         let git_radar_task = tokio::spawn(async move {
             while git_rx.recv().await.is_some() {
                 tokio::time::sleep(Duration::from_millis(450)).await;
                 let _ = git_rx.try_recv();
+
+                // Dynamically attach recursive watches when the first linked worktree or refs/heads appears after startup
+                if let (Some(common), Some(watcher_arc)) = (&git_common_dir, &git_watcher_handle) {
+                    if !worktrees_watched {
+                        let wt_dir = common.join("worktrees");
+                        if wt_dir.is_dir() {
+                            if let Ok(mut w) = watcher_arc.lock() {
+                                if w.watch(&wt_dir, RecursiveMode::Recursive).is_ok() {
+                                    worktrees_watched = true;
+                                }
+                            }
+                        }
+                    }
+                    if !refs_heads_watched {
+                        let rh_dir = common.join("refs").join("heads");
+                        if rh_dir.is_dir() {
+                            if let Ok(mut w) = watcher_arc.lock() {
+                                if w.watch(&rh_dir, RecursiveMode::Recursive).is_ok() {
+                                    refs_heads_watched = true;
+                                }
+                            }
+                        }
+                    }
+                }
+
                 let cfg = settings.lock().await.clone();
                 if let Ok(radar) = workspace_mgr
                     .get_radar_snapshot(&watch_path_git, &cfg, true)
@@ -464,7 +498,7 @@ fn watch_store_dir(
 fn watch_git_refs(
     git_common_dir: &Path,
     on_git_change: impl Fn() + Send + 'static,
-) -> Option<RecommendedWatcher> {
+) -> Option<(RecommendedWatcher, bool, bool)> {
     let refs_heads = git_common_dir.join("refs").join("heads");
     let worktrees_dir = git_common_dir.join("worktrees");
     let root_clone = git_common_dir.to_path_buf();
@@ -475,18 +509,8 @@ fn watch_git_refs(
                 return;
             }
             let relevant = event.paths.iter().any(|p| {
-                let Ok(rel) = p.strip_prefix(&root_clone) else {
-                    return false;
-                };
-                if is_ignored_temp_or_lock(rel) {
-                    return false;
-                }
-                let text = rel.to_string_lossy().replace('\\', "/");
-                text == "HEAD"
-                    || text == "index"
-                    || text.starts_with("refs/heads/")
-                    || (text.starts_with("worktrees/")
-                        && (text.ends_with("/HEAD") || text.ends_with("/index")))
+                p.strip_prefix(&root_clone)
+                    .is_ok_and(is_relevant_git_meta_path)
             });
             if relevant {
                 on_git_change();
@@ -502,13 +526,29 @@ fn watch_git_refs(
     {
         attached = true;
     }
-    if refs_heads.is_dir() && watcher.watch(&refs_heads, RecursiveMode::Recursive).is_ok() {
-        attached = true;
+    let refs_watched =
+        refs_heads.is_dir() && watcher.watch(&refs_heads, RecursiveMode::Recursive).is_ok();
+    let wt_watched =
+        worktrees_dir.is_dir() && watcher.watch(&worktrees_dir, RecursiveMode::Recursive).is_ok();
+    if attached || refs_watched || wt_watched {
+        Some((watcher, wt_watched, refs_watched))
+    } else {
+        None
     }
-    if worktrees_dir.is_dir() && watcher.watch(&worktrees_dir, RecursiveMode::Recursive).is_ok() {
-        attached = true;
+}
+
+fn is_relevant_git_meta_path(relative: &Path) -> bool {
+    if is_ignored_temp_or_lock(relative) {
+        return false;
     }
-    if attached { Some(watcher) } else { None }
+    let text = relative.to_string_lossy().replace('\\', "/");
+    text == "HEAD"
+        || text == "index"
+        || text == "packed-refs"
+        || text == "worktrees"
+        || text.starts_with("refs/heads/")
+        || (text.starts_with("worktrees/")
+            && (text.ends_with("/HEAD") || text.ends_with("/index") || text.ends_with("/gitdir")))
 }
 
 fn watch_runtime_dir(
@@ -624,6 +664,30 @@ mod tests {
             "config.yaml",
         ] {
             assert!(!is_relevant_store_path(Path::new(path)), "{path}");
+        }
+    }
+
+    #[test]
+    fn detects_first_linked_worktree_creation_and_git_meta_paths() {
+        for path in [
+            "HEAD",
+            "index",
+            "packed-refs",
+            "worktrees",
+            "refs/heads/main",
+            "worktrees/wt-a/HEAD",
+            "worktrees/wt-a/index",
+            "worktrees/wt-a/gitdir",
+        ] {
+            assert!(is_relevant_git_meta_path(Path::new(path)), "{path}");
+        }
+        for ignored in [
+            "index.lock",
+            "worktrees/wt-a/HEAD.lock",
+            "objects/pack/pack-123.idx",
+            "logs/HEAD",
+        ] {
+            assert!(!is_relevant_git_meta_path(Path::new(ignored)), "{ignored}");
         }
     }
 }

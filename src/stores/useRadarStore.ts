@@ -13,7 +13,18 @@ export interface IssueRuntimeBadge {
   sessionCount: number;
 }
 
+export function sameWorkspacePath(
+  a: string | null | undefined,
+  b: string | null | undefined,
+): boolean {
+  if (!a || !b) return false;
+  const norm = (p: string) => p.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
+  return norm(a) === norm(b);
+}
+
 interface RadarState {
+  activeRepoPath: string | null;
+  requestSeq: number;
   radar: RadarSnapshot | null;
   scanning: boolean;
   lastError: string | null;
@@ -23,6 +34,7 @@ interface RadarState {
   sessionsByIssueId: Record<string, SessionLease[]>;
   conflictsByIssueId: Record<string, ConflictAlert[]>;
 
+  setActiveRepoPath: (workspacePath: string | null) => void;
   applyRadar: (snap: RadarSnapshot) => void;
   clearRadar: () => void;
   refreshRadar: (workspacePath: string, scanGit?: boolean) => Promise<void>;
@@ -106,6 +118,8 @@ function buildIndices(snap: RadarSnapshot): {
 }
 
 export const useRadarStore = create<RadarState>((set, get) => ({
+  activeRepoPath: null,
+  requestSeq: 0,
   radar: null,
   scanning: false,
   lastError: null,
@@ -114,13 +128,36 @@ export const useRadarStore = create<RadarState>((set, get) => ({
   sessionsByIssueId: {},
   conflictsByIssueId: {},
 
+  setActiveRepoPath: (workspacePath) => {
+    const prev = get().activeRepoPath;
+    if (prev === workspacePath || sameWorkspacePath(prev, workspacePath)) {
+      return;
+    }
+    set((state) => ({
+      activeRepoPath: workspacePath,
+      requestSeq: state.requestSeq + 1,
+      radar: null,
+      scanning: false,
+      lastError: null,
+      badgeByIssueId: {},
+      sessionsByIssueId: {},
+      conflictsByIssueId: {},
+    }));
+  },
+
   applyRadar: (snap) => {
-    const prev = get().radar;
+    const state = get();
+    // Never accept a snapshot belonging to a previously active workspace
+    if (state.activeRepoPath && !sameWorkspacePath(snap.repoPath, state.activeRepoPath)) {
+      return;
+    }
+    const prev = state.radar;
     if (prev && prev.repoId === snap.repoId && snap.generation < prev.generation) {
       return;
     }
     const indices = buildIndices(snap);
     set({
+      activeRepoPath: state.activeRepoPath ?? snap.repoPath,
       radar: snap,
       lastError: null,
       ...indices,
@@ -128,38 +165,71 @@ export const useRadarStore = create<RadarState>((set, get) => ({
   },
 
   clearRadar: () =>
-    set({
+    set((state) => ({
+      activeRepoPath: null,
+      requestSeq: state.requestSeq + 1,
       radar: null,
       scanning: false,
       lastError: null,
       badgeByIssueId: {},
       sessionsByIssueId: {},
       conflictsByIssueId: {},
-    }),
+    })),
 
   refreshRadar: async (workspacePath, scanGit = true) => {
     if (!workspacePath) return;
-    set({ scanning: true, lastError: null });
+    const prevActive = get().activeRepoPath;
+    const switchedWorkspace = Boolean(prevActive && !sameWorkspacePath(prevActive, workspacePath));
+    const seq = get().requestSeq + 1;
+
+    set({
+      activeRepoPath: workspacePath,
+      requestSeq: seq,
+      scanning: true,
+      lastError: null,
+      ...(switchedWorkspace
+        ? {
+            radar: null,
+            badgeByIssueId: {},
+            sessionsByIssueId: {},
+            conflictsByIssueId: {},
+          }
+        : {}),
+    });
+
     try {
       const snap = await ipcGetRadarSnapshot(workspacePath, scanGit);
-      get().applyRadar(snap);
+      const current = get();
+      // Drop late/out-of-order responses if a newer request or workspace switch won
+      if (current.requestSeq !== seq || !sameWorkspacePath(current.activeRepoPath, workspacePath)) {
+        return;
+      }
+      current.applyRadar(snap);
       if (scanGit) {
         set({ lastGitScanAt: Date.now() });
       }
     } catch (err) {
-      set({ lastError: formatIpcError(err) });
+      if (get().requestSeq === seq) {
+        set({ lastError: formatIpcError(err) });
+      }
     } finally {
-      set({ scanning: false });
+      if (get().requestSeq === seq) {
+        set({ scanning: false });
+      }
     }
   },
 
   clearSessionWaiting: async (workspacePath, sessionId) => {
     const snap = await ipcClearSessionWaiting(workspacePath, sessionId);
-    get().applyRadar(snap);
+    if (!get().activeRepoPath || sameWorkspacePath(get().activeRepoPath, workspacePath)) {
+      get().applyRadar(snap);
+    }
   },
 
   releaseSession: async (workspacePath, sessionId) => {
     const snap = await ipcReleaseSession(workspacePath, sessionId);
-    get().applyRadar(snap);
+    if (!get().activeRepoPath || sameWorkspacePath(get().activeRepoPath, workspacePath)) {
+      get().applyRadar(snap);
+    }
   },
 }));

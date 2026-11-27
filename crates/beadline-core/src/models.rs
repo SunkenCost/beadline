@@ -83,6 +83,8 @@ pub struct IssueProof {
     pub session_id: Option<String>,
     #[serde(default)]
     pub actor: Option<String>,
+    #[serde(default)]
+    pub unblocked: Vec<UnblockedSummary>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -545,7 +547,7 @@ pub struct GithubSyncResponse {
     pub snapshot: WorkspaceSnapshot,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UnblockedSummary {
     pub id: String,

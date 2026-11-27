@@ -48,7 +48,7 @@ import { isClosedIterationRound } from "@/lib/human-context";
 import { formatIpcError, ipcPickFolder } from "@/lib/ipc";
 import { resolveModule } from "@/lib/modules";
 import { applyThemeToDocument } from "@/lib/theme";
-import { useRadarStore } from "@/stores/useRadarStore";
+import { sameWorkspacePath, useRadarStore } from "@/stores/useRadarStore";
 import { useSettingsStore } from "@/stores/useSettingsStore";
 import { type ActiveView, useUiStore } from "@/stores/useUiStore";
 import { useWorkspaceStore } from "@/stores/useWorkspaceStore";
@@ -225,9 +225,16 @@ export function App() {
     [moduleScopedIssues],
   );
 
-  const radar = useRadarStore((s) => s.radar);
+  const rawRadar = useRadarStore((s) => s.radar);
+  const radar = rawRadar && sameWorkspacePath(rawRadar.repoPath, activePath) ? rawRadar : null;
+  const setActiveRepoPath = useRadarStore((s) => s.setActiveRepoPath);
   const refreshRadar = useRadarStore((s) => s.refreshRadar);
   const clearRadar = useRadarStore((s) => s.clearRadar);
+
+  // Immediately invalidate stale radar & in-flight requests whenever activePath changes
+  useEffect(() => {
+    setActiveRepoPath(activePath);
+  }, [activePath, setActiveRepoPath]);
 
   // Keep lightweight radar leases hydrated on workspace switch (no git polling loop)
   useEffect(() => {

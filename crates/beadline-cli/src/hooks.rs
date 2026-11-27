@@ -22,7 +22,16 @@ pub fn handle_hook_from_reader<R: Read>(
 ) {
     let mut raw = String::new();
     let _ = reader.take(MAX_HOOK_STDIN_BYTES).read_to_string(&mut raw);
-    let payload: Value = serde_json::from_str(raw.trim()).unwrap_or(Value::Null);
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return;
+    }
+    let Ok(payload) = serde_json::from_str::<Value>(trimmed) else {
+        return;
+    };
+    if !payload.is_object() {
+        return;
+    }
     let _ = process_hook_payload(harness, event_override, fallback_repo, &payload);
 }
 
@@ -32,6 +41,9 @@ pub fn process_hook_payload(
     fallback_repo: &Path,
     payload: &Value,
 ) -> Option<()> {
+    if !payload.is_object() {
+        return None;
+    }
     let harness = normalize_harness(harness_raw);
     let event_name = event_override
         .map(str::trim)
@@ -76,11 +88,18 @@ pub fn process_hook_payload(
         .and_then(Value::as_str)
         .or_else(|| payload.get("request_id").and_then(Value::as_str))
         .or_else(|| payload.get("requestId").and_then(Value::as_str))
+        .or_else(|| {
+            payload
+                .get("toolCall")
+                .and_then(|tc| tc.get("id"))
+                .and_then(Value::as_str)
+        })
         .map(String::from);
 
     let agent = payload
         .get("model")
         .and_then(Value::as_str)
+        .or_else(|| payload.get("modelName").and_then(Value::as_str))
         .or_else(|| payload.get("agent_type").and_then(Value::as_str))
         .map(str::trim)
         .filter(|s| !s.is_empty())
@@ -404,5 +423,72 @@ mod tests {
             .find(|l| l.session_id == "codex_sess_codex_1")
             .unwrap();
         assert_eq!(codex_lease.turn_state, TurnState::IdleBetweenTurns);
+    }
+
+    #[test]
+    fn rejects_empty_malformed_and_non_object_stdin_even_with_event_override() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        init_git_repo(tmp.path());
+        let loc = RepoLocator::locate(tmp.path()).unwrap();
+
+        for bad_stdin in ["", "   \n", "{", "null", "[]", "123", "\"hello\"", "true"] {
+            handle_hook_from_reader(
+                "cursor",
+                Some("sessionStart"),
+                tmp.path(),
+                std::io::Cursor::new(bad_stdin.as_bytes()),
+            );
+        }
+
+        // Neither runtime pulse JSON nor lock files should be created for invalid stdin
+        assert!(list_leases(&loc.runtime_dir).unwrap().is_empty());
+        assert!(
+            !loc.runtime_dir.exists()
+                || std::fs::read_dir(&loc.runtime_dir)
+                    .unwrap()
+                    .next()
+                    .is_none(),
+            "bad hook stdin must never write fake session or lock files"
+        );
+    }
+
+    #[test]
+    fn antigravity_official_payload_with_event_flag_and_tool_call_id() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        init_git_repo(tmp.path());
+        let loc = RepoLocator::locate(tmp.path()).unwrap();
+
+        // Official Antigravity SessionStart payload (no hookEventName field)
+        let agy_start = json!({
+            "conversationId": "ec33ebf9-0cba-4100-8142-c61503f6c587",
+            "workspacePaths": [tmp.path().to_string_lossy()],
+            "modelName": "gemini-pro"
+        });
+        assert!(
+            process_hook_payload("antigravity", Some("SessionStart"), tmp.path(), &agy_start)
+                .is_some()
+        );
+
+        let agy_post = json!({
+            "conversationId": "ec33ebf9-0cba-4100-8142-c61503f6c587",
+            "workspacePaths": [tmp.path().to_string_lossy()],
+            "modelName": "gemini-pro",
+            "toolCall": {
+                "id": "toolu_01",
+                "name": "run_command",
+                "args": { "CommandLine": "cargo test" }
+            }
+        });
+        assert!(
+            process_hook_payload("antigravity", Some("PostToolUse"), tmp.path(), &agy_post)
+                .is_some()
+        );
+
+        let leases = list_leases(&loc.runtime_dir).unwrap();
+        assert_eq!(leases.len(), 1);
+        assert_eq!(leases[0].harness, "antigravity");
+        assert_eq!(leases[0].agent, "gemini-pro");
+        assert!(leases[0].summary.contains("run_command"));
+        assert!(leases[0].summary.contains("cargo test"));
     }
 }

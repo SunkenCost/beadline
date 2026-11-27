@@ -27,6 +27,8 @@ pub struct ObservedWorktree {
     pub full_dirty_paths: Vec<String>,
     /// Full committed paths since `merge-base(base_ref, HEAD)..HEAD`.
     pub full_committed_paths: Vec<String>,
+    /// Full 40-char HEAD SHA (used for pairwise stacked-branch ancestry check).
+    pub head_full_sha: Option<String>,
 }
 
 /// Resolves the repository's default integration baseline (`origin/HEAD` -> `main` -> `master`),
@@ -221,6 +223,7 @@ pub fn scan_worktree_full(
             activity,
             full_dirty_paths: Vec::new(),
             full_committed_paths: Vec::new(),
+            head_full_sha: None,
         };
     }
 
@@ -233,6 +236,7 @@ pub fn scan_worktree_full(
             activity,
             full_dirty_paths: Vec::new(),
             full_committed_paths: Vec::new(),
+            head_full_sha: None,
         };
     }
 
@@ -244,6 +248,7 @@ pub fn scan_worktree_full(
             activity,
             full_dirty_paths: Vec::new(),
             full_committed_paths: Vec::new(),
+            head_full_sha: None,
         };
     };
 
@@ -303,11 +308,11 @@ pub fn scan_worktree_full(
     };
 
     // 2. Committed branch diff vs baseline (`merge-base(base, HEAD)..HEAD`)
+    let head_full_sha =
+        run_git_line(&git_bin, wt_path, &["rev-parse", "--verify", "--quiet", "HEAD"], 1500);
     let full_committed_paths = if let Some((base_ref, base_sha)) = base_info {
-        let head_full = run_git_line(&git_bin, wt_path, &["rev-parse", "--verify", "--quiet", "HEAD"], 1500);
-        match head_full {
-            Some(head_sha) if head_sha == *base_sha => {
-                // Worktree HEAD is right on baseline -> zero committed branch divergence
+        match &head_full_sha {
+            Some(head_sha) if head_sha == base_sha => {
                 activity.branch_diff_status = ScanStatus::Ok;
                 Vec::new()
             }
@@ -317,7 +322,7 @@ pub fn scan_worktree_full(
                     activity.branch_diff_status = ScanStatus::Ok;
                     cached.clone()
                 } else {
-                    match compute_branch_committed_paths(&git_bin, wt_path, base_ref, &head_sha) {
+                    match compute_branch_committed_paths(&git_bin, wt_path, base_ref, head_sha) {
                         Ok(paths) => {
                             committed_cache.insert(cache_key, paths.clone());
                             activity.branch_diff_status = ScanStatus::Ok;
@@ -331,7 +336,6 @@ pub fn scan_worktree_full(
                 }
             }
             None => {
-                // Unborn HEAD (no commits yet)
                 activity.branch_diff_status = ScanStatus::Ok;
                 Vec::new()
             }
@@ -353,6 +357,7 @@ pub fn scan_worktree_full(
         activity,
         full_dirty_paths,
         full_committed_paths,
+        head_full_sha,
     }
 }
 
@@ -856,11 +861,19 @@ pub fn detect_conflicts(
                     },
                 );
             } else {
-                // At least one side committed its edits -> STILL caught via committed + dirty!
-                let lockfile_only = any_shared.iter().all(|p| is_lockfile_path(p));
-                let total_paths = any_shared.len();
-                let sample: Vec<String> =
-                    any_shared.into_iter().take(MAX_CONFLICT_EVIDENCE_PATHS).collect();
+                // Stacked-branch de-noising: if one branch is a direct ancestor of the other
+                // (e.g. feat/c branched off feat/a), only compare edits made AFTER their pairwise
+                // merge-base so inherited ancestor commits never create false overlap alarms!
+                let effective_shared = filter_stacked_ancestor_overlap(a, b, any_shared);
+                if effective_shared.is_empty() {
+                    continue;
+                }
+                let lockfile_only = effective_shared.iter().all(|p| is_lockfile_path(p));
+                let total_paths = effective_shared.len();
+                let sample: Vec<String> = effective_shared
+                    .into_iter()
+                    .take(MAX_CONFLICT_EVIDENCE_PATHS)
+                    .collect();
                 let alert_id = format!(
                     "cfl_{}",
                     fnv1a64_hex(format!("same-branch:{}:{}", pair_key.0, pair_key.1).as_bytes())
@@ -1100,6 +1113,71 @@ pub fn detect_conflicts(
             .then_with(|| a.id.cmp(&b.id))
     });
     alerts
+}
+
+fn filter_stacked_ancestor_overlap(
+    a: &ObservedWorktree,
+    b: &ObservedWorktree,
+    shared: Vec<String>,
+) -> Vec<String> {
+    let (Some(sha_a), Some(sha_b)) = (&a.head_full_sha, &b.head_full_sha) else {
+        return shared;
+    };
+    if sha_a == sha_b {
+        // Two worktrees at the exact same commit only conflict if at least one has dirty edits on a shared file
+        let dirty_a: HashSet<&str> = a.full_dirty_paths.iter().map(String::as_str).collect();
+        let dirty_b: HashSet<&str> = b.full_dirty_paths.iter().map(String::as_str).collect();
+        return shared
+            .into_iter()
+            .filter(|p| dirty_a.contains(p.as_str()) || dirty_b.contains(p.as_str()))
+            .collect();
+    }
+
+    let Some(git_bin) = find_in_path(if cfg!(windows) { "git.exe" } else { "git" }) else {
+        return shared;
+    };
+    let wt_dir = Path::new(&a.activity.path);
+    let Some(mb) = run_git_line(
+        &git_bin,
+        wt_dir,
+        &["--no-optional-locks", "merge-base", sha_a, sha_b],
+        1500,
+    ) else {
+        return shared;
+    };
+
+    // If A is a strict ancestor of B (B is stacked on A), only flag files B actually modified
+    // AFTER A (committed since A or dirty in B), or files A modified in its dirty tree!
+    if mb == *sha_a {
+        let child_new = compute_branch_committed_paths(&git_bin, wt_dir, sha_a, sha_b)
+            .unwrap_or_default();
+        let child_touched: HashSet<&str> = child_new
+            .iter()
+            .chain(b.full_dirty_paths.iter())
+            .map(String::as_str)
+            .collect();
+        let parent_dirty: HashSet<&str> = a.full_dirty_paths.iter().map(String::as_str).collect();
+        return shared
+            .into_iter()
+            .filter(|p| child_touched.contains(p.as_str()) || parent_dirty.contains(p.as_str()))
+            .collect();
+    }
+    if mb == *sha_b {
+        let child_new = compute_branch_committed_paths(&git_bin, wt_dir, sha_b, sha_a)
+            .unwrap_or_default();
+        let child_touched: HashSet<&str> = child_new
+            .iter()
+            .chain(a.full_dirty_paths.iter())
+            .map(String::as_str)
+            .collect();
+        let parent_dirty: HashSet<&str> = b.full_dirty_paths.iter().map(String::as_str).collect();
+        return shared
+            .into_iter()
+            .filter(|p| child_touched.contains(p.as_str()) || parent_dirty.contains(p.as_str()))
+            .collect();
+    }
+
+    shared
 }
 
 fn ordered_pair(a: &str, b: &str) -> (String, String) {
@@ -1510,6 +1588,28 @@ mod tests {
             .attention
             .iter()
             .any(|a| a.kind == AttentionKind::FileOverlap));
+
+        // Stacked child branch `feat/c` branched off `feat/a` touching only `src/child.rs`
+        // must NOT trigger a false overlap with its parent `feat/a`!
+        let wt_c = tmp.path().join("wt-c");
+        run_git(
+            &main_repo,
+            &["worktree", "add", "-b", "feat/c", wt_c.to_str().unwrap(), "feat/a"],
+        );
+        fs::write(wt_c.join("src/child.rs"), "fn child() {}\n").unwrap();
+        run_git(&wt_c, &["add", "src/child.rs"]);
+        run_git(&wt_c, &["commit", "-m", "stacked child only touches child.rs"]);
+
+        let (radar2, _) = compute_radar_snapshot(&loc, &[], 2, true, None);
+        let false_parent_child = radar2.conflicts.iter().any(|c| {
+            let branches: Vec<_> = c
+                .participants
+                .iter()
+                .filter_map(|p| p.branch.as_deref())
+                .collect();
+            branches.contains(&"feat/a") && branches.contains(&"feat/c")
+        });
+        assert!(!false_parent_child, "stacked child touching unrelated file must not alarm against parent");
     }
 
     #[test]
@@ -1614,6 +1714,7 @@ mod tests {
             },
             full_dirty_paths: vec!["src/auth/jwt.rs".into(), "Cargo.lock".into()],
             full_committed_paths: Vec::new(),
+            head_full_sha: None,
         };
         let wt2 = ObservedWorktree {
             activity: WorktreeActivity {
@@ -1624,6 +1725,7 @@ mod tests {
             },
             full_dirty_paths: vec!["Cargo.lock".into()],
             full_committed_paths: Vec::new(),
+            head_full_sha: None,
         };
         let ses = SessionLease {
             session_id: "ses_2".into(),

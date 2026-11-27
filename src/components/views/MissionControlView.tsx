@@ -22,7 +22,7 @@ import { StatusRing } from "@/components/ui/Icons";
 import { useT } from "@/i18n";
 import { formatIpcError, ipcOpenExternalLink, ipcRevealPath } from "@/lib/ipc";
 import { buildAgentPrompt } from "@/lib/prompt-builder";
-import { useRadarStore } from "@/stores/useRadarStore";
+import { sameWorkspacePath, useRadarStore } from "@/stores/useRadarStore";
 import { useSettingsStore } from "@/stores/useSettingsStore";
 import { useUiStore } from "@/stores/useUiStore";
 import { useWorkspaceStore } from "@/stores/useWorkspaceStore";
@@ -41,7 +41,8 @@ export function MissionControlView() {
   const snapshot = useWorkspaceStore((s) => s.snapshot);
   const byId = useWorkspaceStore((s) => s.byId);
 
-  const radar = useRadarStore((s) => s.radar);
+  const rawRadar = useRadarStore((s) => s.radar);
+  const radar = rawRadar && sameWorkspacePath(rawRadar.repoPath, activePath) ? rawRadar : null;
   const scanning = useRadarStore((s) => s.scanning);
   const refreshRadar = useRadarStore((s) => s.refreshRadar);
   const clearSessionWaiting = useRadarStore((s) => s.clearSessionWaiting);
@@ -57,7 +58,7 @@ export function MissionControlView() {
 
   useEffect(() => {
     if (!activePath) return;
-    if (!radar || radar.repoPath.toLowerCase() !== activePath.toLowerCase()) {
+    if (!radar && !useRadarStore.getState().scanning) {
       void refreshRadar(activePath, true);
     }
   }, [activePath, radar, refreshRadar]);

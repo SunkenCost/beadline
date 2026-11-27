@@ -15,58 +15,98 @@ function escapeTomlString(s: string): string {
   return s.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
 }
 
-function quoteShell(s: string): string {
-  if (/[\s"]/.test(s)) {
-    return `"${s.replace(/"/g, '\\"')}"`;
+function isWindowsContext(binPath: string, platformOs?: string): boolean {
+  if (platformOs === "windows") return true;
+  if (platformOs === "macos" || platformOs === "linux") return false;
+  return /^[A-Za-z]:[\\/]/.test(binPath) || binPath.startsWith("\\\\");
+}
+
+/**
+ * Formats an executable path for POSIX shells (`sh`, `bash`, and Git Bash on Windows).
+ * Converts Windows drive backslashes to forward slashes so Git Bash never strips them,
+ * and uses single quotes whenever spaces or shell metacharacters (including `$`) appear.
+ */
+function quotePosixExe(exe: string): string {
+  const normalized = /^[A-Za-z]:\\/.test(exe) ? exe.replace(/\\/g, "/") : exe;
+  if (/[\s"'$`\\;&|<>(){}*?#~!]/.test(normalized)) {
+    return `'${normalized.replace(/'/g, `'\\''`)}'`;
   }
-  return s;
+  return normalized;
+}
+
+/**
+ * Formats an executable + arguments for Windows `cmd /c` (or POSIX `sh -c` on Unix).
+ * Note: `cmd.exe` does not expand `$`, so double quotes safely preserve spaces and `$`.
+ */
+function formatCmdOrPosix(exe: string, args: string, isWindows: boolean): string {
+  if (!isWindows) {
+    return `${quotePosixExe(exe)} ${args}`;
+  }
+  if (/[\s"&|<>^()%!]/.test(exe)) {
+    return `"${exe.replace(/"/g, '""')}" ${args}`;
+  }
+  return `${exe} ${args}`;
+}
+
+/**
+ * Formats an executable + arguments for Windows PowerShell (or POSIX `sh -c` on Unix).
+ * PowerShell requires the call operator `& '...'` when invoking a quoted executable path;
+ * single quotes keep spaces and `$` literal without variable interpolation.
+ */
+function formatPowerShellOrPosix(exe: string, args: string, isWindows: boolean): string {
+  if (!isWindows) {
+    return `${quotePosixExe(exe)} ${args}`;
+  }
+  if (/[\s"'$`&|;(){}@#]/.test(exe)) {
+    return `& '${exe.replace(/'/g, "''")}' ${args}`;
+  }
+  return `${exe} ${args}`;
 }
 
 export function buildHarnessSnippets(
   blBinaryPath: string | null,
   repoPath: string | null,
+  platformOs?: string,
 ): HarnessSnippet[] {
   const blBin = blBinaryPath?.trim() || "bl";
-  const repo = repoPath?.trim() || "<path-to-your-repo>";
-  const blCmd = quoteShell(blBin);
+  const isWin = isWindowsContext(blBin, platformOs);
 
-  const claudeCmd = `claude mcp add beadline -- ${blCmd} mcp --repo ${quoteShell(repo)} --harness claude-code`;
+  // Claude Code runs hook commands in bash / Git Bash on Windows.
+  const blPosix = quotePosixExe(blBin);
+  const claudeHookCmd = `${blPosix} hook claude-code`;
+  // Global MCP configs intentionally omit `--repo` so `bl mcp` resolves the live
+  // worktree & branch from each agent session's actual working directory (`cwd`).
+  const claudeCmd = `claude mcp add beadline -- ${blPosix} mcp --harness claude-code`;
   const claudeHook = JSON.stringify(
     {
       hooks: {
-        SessionStart: [{ hooks: [{ type: "command", command: `${blCmd} hook claude-code` }] }],
-        PreToolUse: [
-          { matcher: "*", hooks: [{ type: "command", command: `${blCmd} hook claude-code` }] },
-        ],
-        PostToolUse: [
-          { matcher: "*", hooks: [{ type: "command", command: `${blCmd} hook claude-code` }] },
-        ],
-        PermissionRequest: [
-          { matcher: "*", hooks: [{ type: "command", command: `${blCmd} hook claude-code` }] },
-        ],
-        Notification: [{ hooks: [{ type: "command", command: `${blCmd} hook claude-code` }] }],
-        Stop: [{ hooks: [{ type: "command", command: `${blCmd} hook claude-code` }] }],
-        SessionEnd: [{ hooks: [{ type: "command", command: `${blCmd} hook claude-code` }] }],
+        SessionStart: [{ hooks: [{ type: "command", command: claudeHookCmd }] }],
+        PreToolUse: [{ matcher: "*", hooks: [{ type: "command", command: claudeHookCmd }] }],
+        PostToolUse: [{ matcher: "*", hooks: [{ type: "command", command: claudeHookCmd }] }],
+        PermissionRequest: [{ matcher: "*", hooks: [{ type: "command", command: claudeHookCmd }] }],
+        Notification: [{ hooks: [{ type: "command", command: claudeHookCmd }] }],
+        Stop: [{ hooks: [{ type: "command", command: claudeHookCmd }] }],
+        SessionEnd: [{ hooks: [{ type: "command", command: claudeHookCmd }] }],
       },
     },
     null,
     2,
   );
 
+  // Codex MCP uses native argv spawning (no shell); hooks run via PowerShell on Windows / sh on Unix.
   const codexToml = `[mcp_servers.beadline]
 command = "${escapeTomlString(blBin)}"
-args = ["mcp", "--repo", "${escapeTomlString(repo)}", "--harness", "codex"]`;
+args = ["mcp", "--harness", "codex"]`;
 
+  const codexHookCmd = formatPowerShellOrPosix(blBin, "hook codex", isWin);
   const codexHook = JSON.stringify(
     {
       hooks: {
-        PermissionRequest: [
-          { matcher: "*", hooks: [{ type: "command", command: `${blCmd} hook codex` }] },
-        ],
-        PostToolUse: [
-          { matcher: "*", hooks: [{ type: "command", command: `${blCmd} hook codex` }] },
-        ],
-        Stop: [{ hooks: [{ type: "command", command: `${blCmd} hook codex` }] }],
+        SessionStart: [{ hooks: [{ type: "command", command: codexHookCmd }] }],
+        PreToolUse: [{ matcher: "*", hooks: [{ type: "command", command: codexHookCmd }] }],
+        PermissionRequest: [{ matcher: "*", hooks: [{ type: "command", command: codexHookCmd }] }],
+        PostToolUse: [{ matcher: "*", hooks: [{ type: "command", command: codexHookCmd }] }],
+        Stop: [{ hooks: [{ type: "command", command: codexHookCmd }] }],
       },
     },
     null,
@@ -78,7 +118,7 @@ args = ["mcp", "--repo", "${escapeTomlString(repo)}", "--harness", "codex"]`;
       mcpServers: {
         beadline: {
           command: blBin,
-          args: ["mcp", "--repo", repo, "--harness", "cursor"],
+          args: ["mcp", "--harness", "cursor"],
         },
       },
     },
@@ -86,16 +126,42 @@ args = ["mcp", "--repo", "${escapeTomlString(repo)}", "--harness", "codex"]`;
     2,
   );
 
+  // Cursor's `preToolUse` is a permission-gating hook where empty stdout blocks tool calls.
+  // Register only passive, non-blocking observation hooks so telemetry can never block Cursor.
   const cursorHook = JSON.stringify(
     {
       version: 1,
       hooks: {
-        sessionStart: [{ type: "command", command: `${blCmd} hook cursor --event sessionStart` }],
-        preToolUse: [{ type: "command", command: `${blCmd} hook cursor --event preToolUse` }],
-        postToolUse: [{ type: "command", command: `${blCmd} hook cursor --event postToolUse` }],
-        afterFileEdit: [{ type: "command", command: `${blCmd} hook cursor --event afterFileEdit` }],
-        stop: [{ type: "command", command: `${blCmd} hook cursor --event stop` }],
-        sessionEnd: [{ type: "command", command: `${blCmd} hook cursor --event sessionEnd` }],
+        sessionStart: [
+          {
+            type: "command",
+            command: formatCmdOrPosix(blBin, "hook cursor --event sessionStart", isWin),
+          },
+        ],
+        postToolUse: [
+          {
+            type: "command",
+            command: formatCmdOrPosix(blBin, "hook cursor --event postToolUse", isWin),
+          },
+        ],
+        afterFileEdit: [
+          {
+            type: "command",
+            command: formatCmdOrPosix(blBin, "hook cursor --event afterFileEdit", isWin),
+          },
+        ],
+        stop: [
+          {
+            type: "command",
+            command: formatCmdOrPosix(blBin, "hook cursor --event stop", isWin),
+          },
+        ],
+        sessionEnd: [
+          {
+            type: "command",
+            command: formatCmdOrPosix(blBin, "hook cursor --event sessionEnd", isWin),
+          },
+        ],
       },
     },
     null,
@@ -107,7 +173,7 @@ args = ["mcp", "--repo", "${escapeTomlString(repo)}", "--harness", "codex"]`;
       mcpServers: {
         beadline: {
           command: blBin,
-          args: ["mcp", "--repo", repo, "--harness", "antigravity"],
+          args: ["mcp", "--harness", "antigravity"],
         },
       },
     },
@@ -115,24 +181,55 @@ args = ["mcp", "--repo", "${escapeTomlString(repo)}", "--harness", "codex"]`;
     2,
   );
 
+  // Antigravity `hooks.json` uses top-level named hook keys, flat arrays for session/turn events,
+  // grouped `{ matcher, hooks }` for tool events, and runs commands via `cmd /c` on Windows / `sh -c` on Unix.
+  // Omit `PreToolUse` (permission gate) and pass explicit `--event` so all Antigravity payload variants match.
   const antigravityHook = JSON.stringify(
     {
-      hooks: {
-        SessionStart: [{ type: "command", command: `${blCmd} hook antigravity` }],
-        PreToolUse: [{ type: "command", command: `${blCmd} hook antigravity` }],
-        PostToolUse: [{ type: "command", command: `${blCmd} hook antigravity` }],
-        Stop: [{ type: "command", command: `${blCmd} hook antigravity` }],
+      beadline: {
+        SessionStart: [
+          {
+            type: "command",
+            command: formatCmdOrPosix(blBin, "hook antigravity --event SessionStart", isWin),
+          },
+        ],
+        PreInvocation: [
+          {
+            type: "command",
+            command: formatCmdOrPosix(blBin, "hook antigravity --event PreInvocation", isWin),
+          },
+        ],
+        PostToolUse: [
+          {
+            matcher: "*",
+            hooks: [
+              {
+                type: "command",
+                command: formatCmdOrPosix(blBin, "hook antigravity --event PostToolUse", isWin),
+              },
+            ],
+          },
+        ],
+        Stop: [
+          {
+            type: "command",
+            command: formatCmdOrPosix(blBin, "hook antigravity --event Stop", isWin),
+          },
+        ],
       },
     },
     null,
     2,
   );
 
-  const cliFlow = `# Run from any Git worktree of this repo
-${blCmd} ready
-${blCmd} claim <issue-id> --summary "implementing step 1" --scope "src/auth/**"
-${blCmd} pulse --state waiting_human --waiting-reason "Confirm token TTL"
-${blCmd} finish <issue-id> --summary "all unit tests green"`;
+  const repoComment = repoPath?.trim()
+    ? `# Run from any Git worktree (e.g. ${repoPath.trim()})`
+    : "# Run from any Git worktree of this repo";
+  const cliFlow = `${repoComment}
+${formatPowerShellOrPosix(blBin, "ready", isWin)}
+${formatPowerShellOrPosix(blBin, 'claim <issue-id> --summary "implementing step 1" --scope "src/auth/**"', isWin)}
+${formatPowerShellOrPosix(blBin, 'pulse --state waiting_human --waiting-reason "Confirm token TTL"', isWin)}
+${formatPowerShellOrPosix(blBin, 'finish <issue-id> --summary "all unit tests green"', isWin)}`;
 
   return [
     {

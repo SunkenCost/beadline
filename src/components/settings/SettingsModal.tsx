@@ -124,8 +124,8 @@ export function SettingsModal() {
   }, [open, activePath, settings.bdPath, settings.deepLinkSchemes]);
 
   const harnessSnippets = useMemo(
-    () => buildHarnessSnippets(blStatus?.path ?? null, activePath),
-    [blStatus?.path, activePath],
+    () => buildHarnessSnippets(blStatus?.path ?? null, activePath, platform.os),
+    [blStatus?.path, activePath, platform.os],
   );
   const activeSnippet = harnessSnippets.find((s) => s.id === selectedHarness) ?? harnessSnippets[0];
 
