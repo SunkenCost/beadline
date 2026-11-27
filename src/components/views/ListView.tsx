@@ -119,7 +119,7 @@ export function ListView({ issues, epics, modulePrefix, moduleAliases }: ListVie
       <div className="min-h-0 flex-1 overflow-auto">
         <table className="w-full border-collapse">
           <thead>
-            <tr className="border-b border-[var(--border)] bg-[var(--bg)] text-left text-[11px] font-medium text-[var(--fg-3)]">
+            <tr className="border-b border-[var(--border)] bg-[var(--bg)] text-left text-[11px] font-medium whitespace-nowrap text-[var(--fg-3)]">
               <th className="sticky top-0 z-10 w-[68px] bg-[var(--bg)] px-3.5 py-2">
                 {t.list.colPrio}
               </th>
@@ -155,13 +155,13 @@ export function ListView({ issues, epics, modulePrefix, moduleAliases }: ListVie
                   onClick={() => openDrawer(it.id)}
                   className="border-b border-[var(--border-subtle)] transition-colors hover:bg-[var(--surface-hover)] cursor-pointer"
                 >
-                  <td className="px-3.5 py-2">
+                  <td className="whitespace-nowrap px-3.5 py-2">
                     <div className="flex items-center gap-1.5 font-mono-tabular text-[11.5px] text-[var(--fg-2)]">
                       <PriorityGlyph priority={it.priority} />
                       <span>P{it.priority}</span>
                     </div>
                   </td>
-                  <td className="px-3.5 py-2 font-mono-tabular text-[11.5px] text-[var(--fg-3)]">
+                  <td className="whitespace-nowrap px-3.5 py-2 font-mono-tabular text-[11.5px] text-[var(--fg-3)]">
                     {it.shortId}
                   </td>
                   <td className="px-3.5 py-2">

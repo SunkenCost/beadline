@@ -4,7 +4,14 @@ import type { BoardLane, Locale, ModuleAliasConfig } from "@/types/ipc";
 export function StatusRing({ lane, size = 13 }: { lane: BoardLane; size?: number }) {
   if (lane === "in_progress") {
     return (
-      <svg width={size} height={size} viewBox="0 0 16 16" fill="none" aria-hidden="true">
+      <svg
+        width={size}
+        height={size}
+        viewBox="0 0 16 16"
+        fill="none"
+        aria-hidden="true"
+        className="shrink-0"
+      >
         <circle cx="8" cy="8" r="6" stroke="var(--accent)" strokeWidth="1.5" />
         <path d="M8 4 A4 4 0 0 1 12 8 L8 8 Z" fill="var(--accent)" />
       </svg>
@@ -12,7 +19,14 @@ export function StatusRing({ lane, size = 13 }: { lane: BoardLane; size?: number
   }
   if (lane === "ready") {
     return (
-      <svg width={size} height={size} viewBox="0 0 16 16" fill="none" aria-hidden="true">
+      <svg
+        width={size}
+        height={size}
+        viewBox="0 0 16 16"
+        fill="none"
+        aria-hidden="true"
+        className="shrink-0"
+      >
         <circle
           cx="8"
           cy="8"
@@ -26,14 +40,28 @@ export function StatusRing({ lane, size = 13 }: { lane: BoardLane; size?: number
   }
   if (lane === "blocked") {
     return (
-      <svg width={size} height={size} viewBox="0 0 16 16" fill="none" aria-hidden="true">
+      <svg
+        width={size}
+        height={size}
+        viewBox="0 0 16 16"
+        fill="none"
+        aria-hidden="true"
+        className="shrink-0"
+      >
         <circle cx="8" cy="8" r="6" stroke="var(--danger)" strokeWidth="1.5" />
         <line x1="4.5" y1="11.5" x2="11.5" y2="4.5" stroke="var(--danger)" strokeWidth="1.4" />
       </svg>
     );
   }
   return (
-    <svg width={size} height={size} viewBox="0 0 16 16" fill="none" aria-hidden="true">
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 16 16"
+      fill="none"
+      aria-hidden="true"
+      className="shrink-0"
+    >
       <circle cx="8" cy="8" r="6" stroke="var(--fg-3)" strokeWidth="1.4" />
       <polyline
         points="5.2 8.2 7.2 10.2 11 6.2"
@@ -121,11 +149,11 @@ export function AssigneeDot({ name }: { name: string }) {
         : "var(--fg-3)";
   return (
     <span
-      className="inline-flex max-w-[116px] items-center gap-1 truncate font-mono-tabular text-[10.5px] text-[var(--fg-3)]"
+      className="inline-flex min-w-0 max-w-[116px] items-center gap-1 whitespace-nowrap font-mono-tabular text-[10.5px] text-[var(--fg-3)]"
       title={name}
     >
       <span className="h-1.5 w-1.5 shrink-0 rounded-full" style={{ backgroundColor: dotColor }} />
-      <span className="truncate">{name}</span>
+      <span className="min-w-0 truncate">{name}</span>
     </span>
   );
 }
@@ -151,7 +179,7 @@ export function ModuleInlineList({
         return (
           <span
             key={k}
-            className="inline-flex items-center gap-1 text-[11px] text-[var(--fg-2)]"
+            className="inline-flex shrink-0 items-center gap-1 whitespace-nowrap text-[11px] text-[var(--fg-2)]"
             title={k}
           >
             <span

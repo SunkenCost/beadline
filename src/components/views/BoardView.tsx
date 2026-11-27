@@ -89,7 +89,7 @@ export function BoardView({ issues, modulePrefix, moduleAliases, onRequestClose 
             openDrawer(it.id);
           }
         }}
-        className={`group relative rounded-[var(--radius-md)] border px-[var(--card-pad-x)] py-[var(--card-pad-y)] transition-[border-color,background-color,box-shadow] duration-100 cursor-pointer ${
+        className={`group relative min-w-0 overflow-hidden rounded-[var(--radius-md)] border px-[var(--card-pad-x)] py-[var(--card-pad-y)] transition-[border-color,background-color,box-shadow] duration-100 cursor-pointer ${
           dragId === it.id ? "opacity-40" : ""
         } ${
           isClosed
@@ -98,7 +98,7 @@ export function BoardView({ issues, modulePrefix, moduleAliases, onRequestClose 
         }`}
       >
         {/* Row 1: Priority glyph + mono ID + optional Epic/Bug + #N + right slot */}
-        <div className="mb-1.5 flex min-h-[18px] items-center gap-1.5">
+        <div className="mb-1.5 flex min-h-[18px] min-w-0 items-center gap-1.5">
           <PriorityGlyph priority={it.priority} />
           <button
             type="button"
@@ -108,25 +108,29 @@ export function BoardView({ issues, modulePrefix, moduleAliases, onRequestClose 
               pushToast(`${t.drawer.copiedId}: ${it.id}`, "ok");
             }}
             title={`${t.actions.copyId}: ${it.id}`}
-            className="font-mono-tabular text-[11px] text-[var(--fg-3)] hover:text-[var(--fg)] cursor-pointer"
+            className="shrink-0 whitespace-nowrap font-mono-tabular text-[11px] text-[var(--fg-3)] hover:text-[var(--fg)] cursor-pointer"
           >
             {it.shortId}
           </button>
           {it.issueType === "epic" && (
-            <span className="text-[11px] text-[var(--fg-3)]">{t.types.epic}</span>
+            <span className="shrink-0 whitespace-nowrap text-[11px] text-[var(--fg-3)]">
+              {t.types.epic}
+            </span>
           )}
           {it.issueType === "bug" && (
-            <span className="text-[11px] text-[var(--danger)]">{t.types.bug}</span>
+            <span className="shrink-0 whitespace-nowrap text-[11px] text-[var(--danger)]">
+              {t.types.bug}
+            </span>
           )}
           {it.smart.githubNumber && (
-            <span className="font-mono-tabular text-[11px] text-[var(--fg-3)]">
+            <span className="shrink-0 whitespace-nowrap font-mono-tabular text-[11px] text-[var(--fg-3)]">
               #{it.smart.githubNumber}
             </span>
           )}
 
-          <div className="relative ml-auto flex min-h-[20px] items-center justify-end">
+          <div className="relative ml-auto flex min-h-[20px] min-w-0 flex-1 items-center justify-end">
             <div
-              className={`transition-opacity duration-100 ${hasQuickDone ? "group-hover:opacity-0" : ""}`}
+              className={`flex min-w-0 max-w-full justify-end transition-opacity duration-100 ${hasQuickDone ? "group-hover:opacity-0" : ""}`}
             >
               <AssigneeDot name={it.assignee} />
             </div>
@@ -137,9 +141,9 @@ export function BoardView({ issues, modulePrefix, moduleAliases, onRequestClose 
                   e.stopPropagation();
                   onRequestClose(it);
                 }}
-                className="pointer-events-none absolute top-1/2 right-0 inline-flex h-5 -translate-y-1/2 items-center gap-0.5 rounded-[var(--radius-xs)] border border-[var(--border)] bg-[var(--surface-hover)] px-1.5 text-[11px] text-[var(--fg-2)] opacity-0 transition-all duration-100 group-hover:pointer-events-auto group-hover:opacity-100 hover:border-[var(--success)] hover:bg-[var(--success-soft)] hover:text-[var(--success)] cursor-pointer"
+                className="pointer-events-none absolute top-1/2 right-0 inline-flex h-5 -translate-y-1/2 items-center gap-0.5 whitespace-nowrap rounded-[var(--radius-xs)] border border-[var(--border)] bg-[var(--surface-hover)] px-1.5 text-[11px] text-[var(--fg-2)] opacity-0 transition-all duration-100 group-hover:pointer-events-auto group-hover:opacity-100 hover:border-[var(--success)] hover:bg-[var(--success-soft)] hover:text-[var(--success)] cursor-pointer"
               >
-                <Check className="h-3 w-3" />
+                <Check className="h-3 w-3 shrink-0" />
                 <span>{t.actions.done}</span>
               </button>
             )}
@@ -148,7 +152,7 @@ export function BoardView({ issues, modulePrefix, moduleAliases, onRequestClose 
 
         {/* Row 2: Clean 2-line title */}
         <div
-          className={`line-clamp-2 text-[13px] leading-[1.45] ${
+          className={`line-clamp-2 break-words text-[13px] leading-[1.45] ${
             isClosed
               ? "font-normal text-[var(--fg-2)] group-hover:text-[var(--fg)]"
               : "font-medium text-[var(--fg)]"
@@ -159,10 +163,10 @@ export function BoardView({ issues, modulePrefix, moduleAliases, onRequestClose 
 
         {/* Row 3: Borderless inline metadata with human-readable parent epic name */}
         {showFoot && (
-          <div className="mt-2 flex flex-wrap items-center gap-x-2.5 gap-y-1 text-[11px] text-[var(--fg-3)]">
+          <div className="mt-2 flex min-w-0 flex-wrap items-center gap-x-2.5 gap-y-1 text-[11px] text-[var(--fg-3)]">
             {runtimeBadge && (
               <span
-                className={`inline-flex items-center gap-1 rounded-[var(--radius-xs)] px-1.5 py-0.25 text-[10.5px] font-medium ${
+                className={`inline-flex max-w-full items-center gap-1 whitespace-nowrap rounded-[var(--radius-xs)] px-1.5 py-0.25 text-[10.5px] font-medium ${
                   runtimeBadge.kind === "waiting"
                     ? "bg-[var(--accent-soft)] text-[var(--accent)]"
                     : runtimeBadge.kind === "conflict"
@@ -173,7 +177,7 @@ export function BoardView({ issues, modulePrefix, moduleAliases, onRequestClose 
                 }`}
               >
                 <span
-                  className={`h-1.5 w-1.5 rounded-full ${
+                  className={`h-1.5 w-1.5 shrink-0 rounded-full ${
                     runtimeBadge.kind === "waiting"
                       ? "bg-[var(--accent)]"
                       : runtimeBadge.kind === "conflict"
@@ -183,7 +187,7 @@ export function BoardView({ issues, modulePrefix, moduleAliases, onRequestClose 
                           : "bg-[var(--fg-3)]"
                   }`}
                 />
-                <span>
+                <span className="truncate">
                   {runtimeBadge.kind === "waiting"
                     ? `${t.board.badgeWaiting} · ${runtimeBadge.label}`
                     : runtimeBadge.kind === "conflict"
@@ -209,17 +213,17 @@ export function BoardView({ issues, modulePrefix, moduleAliases, onRequestClose 
                   e.stopPropagation();
                   openDrawer(openBlockers[0]?.id ?? it.id);
                 }}
-                className="text-[11px] text-[var(--danger)] hover:underline underline-offset-2 cursor-pointer"
+                className="shrink-0 whitespace-nowrap text-[11px] text-[var(--danger)] hover:underline underline-offset-2 cursor-pointer"
               >
                 {t.board.blockedByPrefix} {openBlockers[0].shortId}
                 {openBlockers.length > 1 ? ` +${openBlockers.length - 1}` : ""}
               </button>
             ) : it.lane === "ready" && unlocksCount > 0 ? (
-              <span className="text-[11px] text-[var(--success)]">
+              <span className="shrink-0 whitespace-nowrap text-[11px] text-[var(--success)]">
                 {t.board.unlocksCount} {unlocksCount} {t.board.itemsUnit}
               </span>
             ) : firstCommit ? (
-              <span className="font-mono-tabular text-[10.5px] text-[var(--fg-3)]">
+              <span className="shrink-0 whitespace-nowrap font-mono-tabular text-[10.5px] text-[var(--fg-3)]">
                 {firstCommit}
               </span>
             ) : null}
@@ -232,7 +236,7 @@ export function BoardView({ issues, modulePrefix, moduleAliases, onRequestClose 
                   openDrawer(it.parentId ?? it.id);
                 }}
                 title={it.parentTitle ?? undefined}
-                className="max-w-[165px] truncate text-[11px] text-[var(--fg-3)] hover:text-[var(--fg)] cursor-pointer"
+                className="max-w-full truncate text-[11px] text-[var(--fg-3)] hover:text-[var(--fg)] cursor-pointer"
               >
                 {t.board.belongsTo} {parentReadable}
               </button>
@@ -328,7 +332,7 @@ export function BoardView({ issues, modulePrefix, moduleAliases, onRequestClose 
               )}
 
               {!isCollapsed && (
-                <div className="grid grid-cols-4 overflow-x-auto border-t border-[var(--border-subtle)]">
+                <div className="grid grid-cols-[repeat(4,minmax(240px,1fr))] overflow-x-auto border-t border-[var(--border-subtle)]">
                   {LANES.map((lane) => {
                     const laneCardsAll = group.items.filter((x) => x.lane === lane);
                     const hiddenRounds =
@@ -358,11 +362,11 @@ export function BoardView({ issues, modulePrefix, moduleAliases, onRequestClose 
                           e.preventDefault();
                           void handleDrop(lane);
                         }}
-                        className={`flex min-w-[230px] flex-col gap-[var(--lane-gap)] border-r border-[var(--border-subtle)] p-2.5 last:border-r-0 ${
+                        className={`flex min-w-0 flex-col gap-[var(--lane-gap)] border-r border-[var(--border-subtle)] p-2.5 last:border-r-0 ${
                           overTarget === dropKey ? "bg-[var(--accent-soft)]" : ""
                         }`}
                       >
-                        <div className="flex items-center gap-1.5 px-1 pb-0.5 text-[11px] text-[var(--fg-3)]">
+                        <div className="flex items-center gap-1.5 whitespace-nowrap px-1 pb-0.5 text-[11px] text-[var(--fg-3)]">
                           <StatusRing lane={lane} size={11} />
                           <span>{t.lanes[lane]}</span>
                           <span className="font-mono-tabular">{laneCardsAll.length}</span>
@@ -391,7 +395,7 @@ export function BoardView({ issues, modulePrefix, moduleAliases, onRequestClose 
 
   // Flat 4-column hairline Kanban
   return (
-    <div className="grid min-h-0 flex-1 grid-cols-4 overflow-x-auto overflow-y-hidden">
+    <div className="grid min-h-0 flex-1 grid-cols-[repeat(4,minmax(256px,1fr))] overflow-x-auto overflow-y-hidden">
       {LANES.map((lane) => {
         const allCards = issues.filter((it) => it.lane === lane);
         const hiddenRounds =
@@ -422,12 +426,12 @@ export function BoardView({ issues, modulePrefix, moduleAliases, onRequestClose 
               e.preventDefault();
               void handleDrop(lane);
             }}
-            className={`flex min-h-0 min-w-[248px] flex-col border-r border-[var(--border-subtle)] last:border-r-0 transition-colors ${
+            className={`flex min-h-0 min-w-0 flex-col border-r border-[var(--border-subtle)] last:border-r-0 transition-colors ${
               isDragOver ? "bg-[var(--accent-soft)]" : ""
             }`}
           >
             {/* Flat hairline column header — zero boxes, zero redundant subtitles */}
-            <header className="flex shrink-0 items-center gap-2 px-3.5 pt-3 pb-2">
+            <header className="flex shrink-0 items-center gap-2 whitespace-nowrap px-3.5 pt-3 pb-2">
               <StatusRing lane={lane} />
               <h2 className="text-[12.5px] font-semibold text-[var(--fg)]">{t.lanes[lane]}</h2>
               <span className="font-mono-tabular text-[11.5px] text-[var(--fg-3)]">

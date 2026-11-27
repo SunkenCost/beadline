@@ -531,24 +531,24 @@ export function App() {
           {/* Main Stage */}
           <main className="flex min-w-0 flex-1 flex-col overflow-hidden bg-[var(--bg)]">
             {/* Topbar */}
-            <div className="flex h-11 shrink-0 items-center gap-3 border-b border-[var(--border)] px-4">
-              <div className="flex min-w-0 items-center gap-2">
-                <h1 className="whitespace-nowrap text-[13.5px] font-semibold text-[var(--fg)]">
+            <div className="flex min-h-11 shrink-0 flex-wrap items-center gap-x-3 gap-y-2 border-b border-[var(--border)] px-4 py-1.5">
+              <div className="flex min-w-0 shrink-0 items-center gap-2">
+                <h1 className="shrink-0 whitespace-nowrap text-[13.5px] font-semibold text-[var(--fg)]">
                   {viewTitle}
                 </h1>
                 {activeModMeta && activeView !== "all-active" && (
                   <>
-                    <span className="text-[var(--fg-3)]">/</span>
-                    <span className="inline-flex items-center gap-1.5 text-[12px] font-medium text-[var(--fg)]">
+                    <span className="shrink-0 text-[var(--fg-3)]">/</span>
+                    <span className="inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-[var(--radius-xs)] border border-[var(--border-subtle)] bg-[var(--surface-subtle)] px-2 py-0.5 text-[12px] font-medium text-[var(--fg)]">
                       <span
-                        className="h-1.5 w-1.5 rounded-full"
+                        className="h-1.5 w-1.5 shrink-0 rounded-full"
                         style={{ backgroundColor: activeModMeta.color }}
                       />
-                      <span>{activeModMeta.label}</span>
+                      <span className="max-w-[180px] truncate">{activeModMeta.label}</span>
                       <button
                         type="button"
                         onClick={() => setActiveModule("")}
-                        className="text-[var(--fg-3)] hover:text-[var(--fg)] cursor-pointer"
+                        className="shrink-0 text-[var(--fg-3)] hover:text-[var(--fg)] cursor-pointer"
                       >
                         <X className="h-3 w-3" />
                       </button>
@@ -558,7 +558,7 @@ export function App() {
 
                 {/* Borderless inline KPI strip */}
                 {hasReadyWorkspace && activeView !== "all-active" && (
-                  <div className="ml-2 hidden items-center gap-3 border-l border-[var(--border)] pl-3 lg:flex">
+                  <div className="ml-2 hidden shrink-0 items-center gap-3 border-l border-[var(--border)] pl-3 2xl:flex">
                     {(
                       [
                         ["in_progress", "var(--accent)", kpiCounts.in_progress],
@@ -571,10 +571,10 @@ export function App() {
                         key={lane}
                         type="button"
                         onClick={() => jumpToLaneList(lane)}
-                        className="inline-flex items-center gap-1.5 whitespace-nowrap text-[11.5px] text-[var(--fg-3)] hover:text-[var(--fg)] cursor-pointer"
+                        className="inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap text-[11.5px] text-[var(--fg-3)] hover:text-[var(--fg)] cursor-pointer"
                       >
                         <span
-                          className="h-1.5 w-1.5 rounded-full"
+                          className="h-1.5 w-1.5 shrink-0 rounded-full"
                           style={{ backgroundColor: color }}
                         />
                         <span>{t.lanes[lane]}</span>
@@ -588,8 +588,8 @@ export function App() {
               </div>
 
               {hasReadyWorkspace && activeView !== "all-active" && (
-                <div className="ml-auto flex items-center gap-1.5">
-                  <div className="relative flex h-7 w-44 items-center rounded-[var(--radius-sm)] border border-[var(--border)] bg-[var(--surface)] px-2 focus-within:w-56 focus-within:border-[var(--border-strong)] transition-[width,border-color]">
+                <div className="ml-auto flex flex-wrap items-center justify-end gap-1.5">
+                  <div className="relative flex h-7 w-40 shrink-0 items-center rounded-[var(--radius-sm)] border border-[var(--border)] bg-[var(--surface)] px-2 focus-within:w-52 focus-within:border-[var(--border-strong)] transition-[width,border-color]">
                     <Search className="mr-1.5 h-3.5 w-3.5 shrink-0 text-[var(--fg-3)]" />
                     <input
                       ref={searchInputRef}
@@ -597,13 +597,13 @@ export function App() {
                       value={search}
                       onChange={(e) => setSearch(e.target.value)}
                       placeholder={t.board.searchPlaceholder}
-                      className="w-full bg-transparent text-[12px] text-[var(--fg)] outline-none placeholder:text-[var(--fg-3)]"
+                      className="min-w-0 flex-1 bg-transparent text-[12px] text-[var(--fg)] outline-none placeholder:text-[var(--fg-3)]"
                     />
                     {search && (
                       <button
                         type="button"
                         onClick={() => setSearch("")}
-                        className="text-[var(--fg-3)] hover:text-[var(--fg)] cursor-pointer"
+                        className="shrink-0 text-[var(--fg-3)] hover:text-[var(--fg)] cursor-pointer"
                       >
                         <X className="h-3 w-3" />
                       </button>
@@ -612,11 +612,11 @@ export function App() {
 
                   {activeView === "board" && (
                     <>
-                      <div className="inline-flex h-7 items-center rounded-[var(--radius-sm)] border border-[var(--border)] bg-[var(--surface-subtle)] p-0.5">
+                      <div className="inline-flex h-7 shrink-0 items-center rounded-[var(--radius-sm)] border border-[var(--border)] bg-[var(--surface-subtle)] p-0.5">
                         <button
                           type="button"
                           onClick={() => setBoardGroupMode("flat")}
-                          className={`h-[22px] rounded-[var(--radius-xs)] px-2 text-[11.5px] cursor-pointer ${
+                          className={`h-[22px] shrink-0 whitespace-nowrap rounded-[var(--radius-xs)] px-2 text-[11.5px] cursor-pointer ${
                             boardGroupMode === "flat"
                               ? "bg-[var(--surface)] font-medium text-[var(--fg)] shadow-[var(--shadow-xs)]"
                               : "text-[var(--fg-2)] hover:text-[var(--fg)]"
@@ -627,7 +627,7 @@ export function App() {
                         <button
                           type="button"
                           onClick={() => setBoardGroupMode("epic")}
-                          className={`h-[22px] rounded-[var(--radius-xs)] px-2 text-[11.5px] cursor-pointer ${
+                          className={`h-[22px] shrink-0 whitespace-nowrap rounded-[var(--radius-xs)] px-2 text-[11.5px] cursor-pointer ${
                             boardGroupMode === "epic"
                               ? "bg-[var(--surface)] font-medium text-[var(--fg)] shadow-[var(--shadow-xs)]"
                               : "text-[var(--fg-2)] hover:text-[var(--fg)]"
@@ -638,11 +638,11 @@ export function App() {
                       </div>
 
                       {boardGroupMode === "flat" && (
-                        <div className="inline-flex h-7 items-center rounded-[var(--radius-sm)] border border-[var(--border)] bg-[var(--surface-subtle)] p-0.5">
+                        <div className="inline-flex h-7 shrink-0 items-center rounded-[var(--radius-sm)] border border-[var(--border)] bg-[var(--surface-subtle)] p-0.5">
                           <button
                             type="button"
                             onClick={() => setBoardScope("tasks")}
-                            className={`h-[22px] rounded-[var(--radius-xs)] px-2 text-[11.5px] cursor-pointer ${
+                            className={`h-[22px] shrink-0 whitespace-nowrap rounded-[var(--radius-xs)] px-2 text-[11.5px] cursor-pointer ${
                               boardScope === "tasks"
                                 ? "bg-[var(--surface)] font-medium text-[var(--fg)] shadow-[var(--shadow-xs)]"
                                 : "text-[var(--fg-2)] hover:text-[var(--fg)]"
@@ -653,7 +653,7 @@ export function App() {
                           <button
                             type="button"
                             onClick={() => setBoardScope("all")}
-                            className={`h-[22px] rounded-[var(--radius-xs)] px-2 text-[11.5px] cursor-pointer ${
+                            className={`h-[22px] shrink-0 whitespace-nowrap rounded-[var(--radius-xs)] px-2 text-[11.5px] cursor-pointer ${
                               boardScope === "all"
                                 ? "bg-[var(--surface)] font-medium text-[var(--fg)] shadow-[var(--shadow-xs)]"
                                 : "text-[var(--fg-2)] hover:text-[var(--fg)]"
