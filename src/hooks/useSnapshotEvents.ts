@@ -65,7 +65,7 @@ export function useSnapshotEvents() {
       if (
         activePath &&
         !scanning &&
-        (activeView === "mission" || activeView === "board") &&
+        (activeView === "mission" || activeView === "tasks") &&
         Date.now() - lastGitScanAt >= FOCUS_RESCAN_MIN_INTERVAL_MS
       ) {
         void refreshRadar(activePath, true);

@@ -27,7 +27,7 @@ import { Tooltip, TooltipProvider } from "@/components/ui/Tooltip";
 import { AllActiveView } from "@/components/views/AllActiveView";
 import { BoardView } from "@/components/views/BoardView";
 import { EpicsView } from "@/components/views/EpicsView";
-import { ListView } from "@/components/views/ListView";
+import { TasksView } from "@/components/views/TasksView";
 
 const MissionControlView = lazy(() =>
   import("@/components/views/MissionControlView").then((m) => ({
@@ -60,14 +60,27 @@ import type { BoardLane, IssueDto } from "@/types/ipc";
 const NAV_ITEMS: readonly {
   id: ActiveView;
   icon: typeof Kanban;
-  labelKey: "mission" | "board" | "epics" | "dag" | "list";
+  labelKey: "tasks" | "mission" | "epics" | "dag";
 }[] = [
+  { id: "tasks", icon: List, labelKey: "tasks" },
   { id: "mission", icon: Radar, labelKey: "mission" },
-  { id: "board", icon: Kanban, labelKey: "board" },
   { id: "epics", icon: Layers, labelKey: "epics" },
   { id: "dag", icon: GitFork, labelKey: "dag" },
-  { id: "list", icon: List, labelKey: "list" },
 ];
+
+function useIsWideScreen(): boolean {
+  const [wide, setWide] = useState(() =>
+    typeof window !== "undefined" ? window.matchMedia("(min-width: 1024px)").matches : true,
+  );
+  useEffect(() => {
+    const mq = window.matchMedia("(min-width: 1024px)");
+    const onChange = () => setWide(mq.matches);
+    onChange();
+    mq.addEventListener("change", onChange);
+    return () => mq.removeEventListener("change", onChange);
+  }, []);
+  return wide;
+}
 
 export function App() {
   const t = useT();
@@ -91,6 +104,7 @@ export function App() {
 
   const {
     activeView,
+    tasksMode,
     sidebarCollapsed,
     activeModule,
     boardScope,
@@ -99,6 +113,8 @@ export function App() {
     closedLaneCollapsed,
     search,
     setActiveView,
+    setTasksMode,
+    setTasksFilter,
     setSettingsOpen,
     openCreateModal,
     openDrawer,
@@ -108,9 +124,9 @@ export function App() {
     setHideClosedRounds,
     setClosedLaneCollapsed,
     setSearch,
-    setListLaneFilter,
     pushToast,
   } = useUiStore();
+  const isWide = useIsWideScreen();
 
   const [closingIssue, setClosingIssue] = useState<IssueDto | null>(null);
   const [welcomePath, setWelcomePath] = useState("");
@@ -217,13 +233,13 @@ export function App() {
 
   const kpiCounts = useMemo(() => {
     const base =
-      activeView === "board" && boardScope === "tasks"
+      activeView === "tasks" && tasksMode === "board" && boardScope === "tasks"
         ? moduleScopedIssues.filter((i) => i.issueType !== "epic")
-        : moduleScopedIssues;
+        : moduleScopedIssues.filter((i) => i.issueType !== "epic");
     const c = { in_progress: 0, ready: 0, blocked: 0, closed: 0 };
     for (const it of base) c[it.lane] += 1;
     return c;
-  }, [moduleScopedIssues, activeView, boardScope]);
+  }, [moduleScopedIssues, activeView, tasksMode, boardScope]);
 
   const sidebarLiveTasks = useMemo(
     () => moduleScopedIssues.filter((i) => i.lane === "in_progress" && i.issueType !== "epic"),
@@ -260,12 +276,14 @@ export function App() {
         ? radar.attention.length
         : radar.sessions.length
       : 0;
+    const openTaskCount = moduleScopedIssues.filter(
+      (i) => i.issueType !== "epic" && i.lane !== "closed",
+    ).length;
     return {
+      tasks: openTaskCount,
       mission: missionCount,
-      board: moduleScopedIssues.filter((i) => i.issueType !== "epic").length,
       epics: moduleScopedIssues.filter((i) => i.issueType === "epic").length,
       dag: edgeCount,
-      list: moduleScopedIssues.length,
     };
   }, [moduleScopedIssues, snapshot?.edges, radar]);
 
@@ -322,8 +340,9 @@ export function App() {
   };
 
   const jumpToLaneList = (lane: BoardLane) => {
-    setListLaneFilter(lane);
-    setActiveView("list");
+    setActiveView("tasks");
+    setTasksMode("list");
+    setTasksFilter(lane);
   };
 
   const hasClosedRounds = useMemo(() => boardIssues.some(isClosedIterationRound), [boardIssues]);
@@ -332,7 +351,8 @@ export function App() {
   const viewTitle =
     activeView === "all-active"
       ? t.nav.allActive
-      : t.nav[NAV_ITEMS.find((n) => n.id === activeView)?.labelKey ?? "board"];
+      : t.nav[NAV_ITEMS.find((n) => n.id === activeView)?.labelKey ?? "tasks"];
+  const usingSplitPreview = isWide && activeView === "tasks" && tasksMode === "list";
 
   return (
     <TooltipProvider delay={300}>
@@ -625,103 +645,135 @@ export function App() {
                     )}
                   </div>
 
-                  {activeView === "board" && (
-                    <Popover
-                      align="end"
-                      className="w-[248px] p-3"
-                      trigger={
-                        <Button size="md" variant="outline" className="text-[11.5px]">
-                          <SlidersHorizontal className="h-3.5 w-3.5" />
-                          <span>{t.board.displayBtn}</span>
-                        </Button>
-                      }
-                    >
-                      <div className="flex flex-col gap-3">
-                        <div className="space-y-1.5">
-                          <div className="text-[11px] font-medium text-[var(--fg-3)]">
-                            {t.board.displayLayout}
-                          </div>
-                          <div className="grid grid-cols-2 gap-1 rounded-[var(--radius-sm)] border border-[var(--border)] bg-[var(--surface-subtle)] p-0.5">
-                            <button
-                              type="button"
-                              onClick={() => setBoardGroupMode("flat")}
-                              className={`h-6 whitespace-nowrap rounded-[var(--radius-xs)] text-[11.5px] cursor-pointer ${
-                                boardGroupMode === "flat"
-                                  ? "bg-[var(--surface)] font-medium text-[var(--fg)] shadow-[var(--shadow-xs)]"
-                                  : "text-[var(--fg-2)] hover:text-[var(--fg)]"
-                              }`}
-                            >
-                              {t.board.flatMode}
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => setBoardGroupMode("epic")}
-                              className={`h-6 whitespace-nowrap rounded-[var(--radius-xs)] text-[11.5px] cursor-pointer ${
-                                boardGroupMode === "epic"
-                                  ? "bg-[var(--surface)] font-medium text-[var(--fg)] shadow-[var(--shadow-xs)]"
-                                  : "text-[var(--fg-2)] hover:text-[var(--fg)]"
-                              }`}
-                            >
-                              {t.board.groupByEpic}
-                            </button>
-                          </div>
-                        </div>
-
-                        {boardGroupMode === "flat" && (
-                          <div className="space-y-1.5">
-                            <div className="text-[11px] font-medium text-[var(--fg-3)]">
-                              {t.board.displayScope}
-                            </div>
-                            <div className="grid grid-cols-2 gap-1 rounded-[var(--radius-sm)] border border-[var(--border)] bg-[var(--surface-subtle)] p-0.5">
-                              <button
-                                type="button"
-                                onClick={() => setBoardScope("tasks")}
-                                className={`h-6 whitespace-nowrap rounded-[var(--radius-xs)] text-[11.5px] cursor-pointer ${
-                                  boardScope === "tasks"
-                                    ? "bg-[var(--surface)] font-medium text-[var(--fg)] shadow-[var(--shadow-xs)]"
-                                    : "text-[var(--fg-2)] hover:text-[var(--fg)]"
-                                }`}
-                              >
-                                {t.board.tasksOnly}
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => setBoardScope("all")}
-                                className={`h-6 whitespace-nowrap rounded-[var(--radius-xs)] text-[11.5px] cursor-pointer ${
-                                  boardScope === "all"
-                                    ? "bg-[var(--surface)] font-medium text-[var(--fg)] shadow-[var(--shadow-xs)]"
-                                    : "text-[var(--fg-2)] hover:text-[var(--fg)]"
-                                }`}
-                              >
-                                {t.board.withEpics}
-                              </button>
-                            </div>
-                          </div>
-                        )}
-
-                        {boardGroupMode === "flat" && (
-                          <div className="flex items-center justify-between gap-2 border-t border-[var(--border-subtle)] pt-2.5 text-[12px] text-[var(--fg-2)]">
-                            <span>{t.board.showClosedLane}</span>
-                            <Switch
-                              checked={!closedLaneCollapsed}
-                              onCheckedChange={(show) => setClosedLaneCollapsed(!show)}
-                              ariaLabel={t.board.showClosedLane}
-                            />
-                          </div>
-                        )}
-
-                        {hasClosedRounds && (
-                          <div className="flex items-center justify-between gap-2 border-t border-[var(--border-subtle)] pt-2.5 text-[12px] text-[var(--fg-2)]">
-                            <span>{t.board.hideRounds}</span>
-                            <Switch
-                              checked={hideClosedRounds}
-                              onCheckedChange={(checked) => setHideClosedRounds(checked)}
-                              ariaLabel={t.board.hideRounds}
-                            />
-                          </div>
-                        )}
+                  {activeView === "tasks" && (
+                    <>
+                      {/* Instant List <-> Kanban mode switcher */}
+                      <div className="inline-flex h-7 shrink-0 items-center rounded-[var(--radius-sm)] border border-[var(--border)] bg-[var(--surface-subtle)] p-0.5">
+                        <button
+                          type="button"
+                          onClick={() => setTasksMode("list")}
+                          className={`inline-flex h-[22px] shrink-0 items-center gap-1 whitespace-nowrap rounded-[var(--radius-xs)] px-2 text-[11.5px] cursor-pointer ${
+                            tasksMode === "list"
+                              ? "bg-[var(--surface)] font-medium text-[var(--fg)] shadow-[var(--shadow-xs)]"
+                              : "text-[var(--fg-2)] hover:text-[var(--fg)]"
+                          }`}
+                        >
+                          <List className="h-3 w-3 shrink-0" />
+                          <span>{t.board.viewList}</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setTasksMode("board")}
+                          className={`inline-flex h-[22px] shrink-0 items-center gap-1 whitespace-nowrap rounded-[var(--radius-xs)] px-2 text-[11.5px] cursor-pointer ${
+                            tasksMode === "board"
+                              ? "bg-[var(--surface)] font-medium text-[var(--fg)] shadow-[var(--shadow-xs)]"
+                              : "text-[var(--fg-2)] hover:text-[var(--fg)]"
+                          }`}
+                        >
+                          <Kanban className="h-3 w-3 shrink-0" />
+                          <span>{t.board.viewBoard}</span>
+                        </button>
                       </div>
-                    </Popover>
+
+                      {tasksMode === "board" && (
+                        <Popover
+                          align="end"
+                          className="w-[248px] p-3"
+                          trigger={
+                            <Button size="md" variant="outline" className="text-[11.5px]">
+                              <SlidersHorizontal className="h-3.5 w-3.5" />
+                              <span>{t.board.displayBtn}</span>
+                            </Button>
+                          }
+                        >
+                          <div className="flex flex-col gap-3">
+                            <div className="space-y-1.5">
+                              <div className="text-[11px] font-medium text-[var(--fg-3)]">
+                                {t.board.displayLayout}
+                              </div>
+                              <div className="grid grid-cols-2 gap-1 rounded-[var(--radius-sm)] border border-[var(--border)] bg-[var(--surface-subtle)] p-0.5">
+                                <button
+                                  type="button"
+                                  onClick={() => setBoardGroupMode("flat")}
+                                  className={`h-6 whitespace-nowrap rounded-[var(--radius-xs)] text-[11.5px] cursor-pointer ${
+                                    boardGroupMode === "flat"
+                                      ? "bg-[var(--surface)] font-medium text-[var(--fg)] shadow-[var(--shadow-xs)]"
+                                      : "text-[var(--fg-2)] hover:text-[var(--fg)]"
+                                  }`}
+                                >
+                                  {t.board.flatMode}
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setBoardGroupMode("epic")}
+                                  className={`h-6 whitespace-nowrap rounded-[var(--radius-xs)] text-[11.5px] cursor-pointer ${
+                                    boardGroupMode === "epic"
+                                      ? "bg-[var(--surface)] font-medium text-[var(--fg)] shadow-[var(--shadow-xs)]"
+                                      : "text-[var(--fg-2)] hover:text-[var(--fg)]"
+                                  }`}
+                                >
+                                  {t.board.groupByEpic}
+                                </button>
+                              </div>
+                            </div>
+
+                            {boardGroupMode === "flat" && (
+                              <div className="space-y-1.5">
+                                <div className="text-[11px] font-medium text-[var(--fg-3)]">
+                                  {t.board.displayScope}
+                                </div>
+                                <div className="grid grid-cols-2 gap-1 rounded-[var(--radius-sm)] border border-[var(--border)] bg-[var(--surface-subtle)] p-0.5">
+                                  <button
+                                    type="button"
+                                    onClick={() => setBoardScope("tasks")}
+                                    className={`h-6 whitespace-nowrap rounded-[var(--radius-xs)] text-[11.5px] cursor-pointer ${
+                                      boardScope === "tasks"
+                                        ? "bg-[var(--surface)] font-medium text-[var(--fg)] shadow-[var(--shadow-xs)]"
+                                        : "text-[var(--fg-2)] hover:text-[var(--fg)]"
+                                    }`}
+                                  >
+                                    {t.board.tasksOnly}
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => setBoardScope("all")}
+                                    className={`h-6 whitespace-nowrap rounded-[var(--radius-xs)] text-[11.5px] cursor-pointer ${
+                                      boardScope === "all"
+                                        ? "bg-[var(--surface)] font-medium text-[var(--fg)] shadow-[var(--shadow-xs)]"
+                                        : "text-[var(--fg-2)] hover:text-[var(--fg)]"
+                                    }`}
+                                  >
+                                    {t.board.withEpics}
+                                  </button>
+                                </div>
+                              </div>
+                            )}
+
+                            {boardGroupMode === "flat" && (
+                              <div className="flex items-center justify-between gap-2 border-t border-[var(--border-subtle)] pt-2.5 text-[12px] text-[var(--fg-2)]">
+                                <span>{t.board.showClosedLane}</span>
+                                <Switch
+                                  checked={!closedLaneCollapsed}
+                                  onCheckedChange={(show) => setClosedLaneCollapsed(!show)}
+                                  ariaLabel={t.board.showClosedLane}
+                                />
+                              </div>
+                            )}
+
+                            {hasClosedRounds && (
+                              <div className="flex items-center justify-between gap-2 border-t border-[var(--border-subtle)] pt-2.5 text-[12px] text-[var(--fg-2)]">
+                                <span>{t.board.hideRounds}</span>
+                                <Switch
+                                  checked={hideClosedRounds}
+                                  onCheckedChange={(checked) => setHideClosedRounds(checked)}
+                                  ariaLabel={t.board.hideRounds}
+                                />
+                              </div>
+                            )}
+                          </div>
+                        </Popover>
+                      )}
+                    </>
                   )}
 
                   {snapshot?.storageBackend === "dolt-cli" && (
@@ -829,13 +881,23 @@ export function App() {
               <Suspense fallback={null}>
                 <MissionControlView />
               </Suspense>
-            ) : activeView === "board" ? (
-              <BoardView
-                issues={boardIssues}
-                modulePrefix={modulePrefix}
-                moduleAliases={moduleAliases}
-                onRequestClose={setClosingIssue}
-              />
+            ) : activeView === "tasks" ? (
+              tasksMode === "board" ? (
+                <BoardView
+                  issues={boardIssues}
+                  modulePrefix={modulePrefix}
+                  moduleAliases={moduleAliases}
+                  onRequestClose={setClosingIssue}
+                />
+              ) : (
+                <TasksView
+                  issues={searchScopedIssues}
+                  modulePrefix={modulePrefix}
+                  moduleAliases={moduleAliases}
+                  isWide={isWide}
+                  onRequestClose={setClosingIssue}
+                />
+              )
             ) : activeView === "epics" ? (
               <EpicsView
                 epics={filteredEpics}
@@ -843,7 +905,7 @@ export function App() {
                 modulePrefix={modulePrefix}
                 moduleAliases={moduleAliases}
               />
-            ) : activeView === "dag" ? (
+            ) : (
               <Suspense fallback={null}>
                 <DagView
                   issues={searchScopedIssues}
@@ -852,22 +914,17 @@ export function App() {
                   moduleAliases={moduleAliases}
                 />
               </Suspense>
-            ) : (
-              <ListView
-                issues={searchScopedIssues}
-                epics={snapshot.epics}
-                modulePrefix={modulePrefix}
-                moduleAliases={moduleAliases}
-              />
             )}
           </main>
         </div>
 
-        <IssueDrawer
-          modulePrefix={modulePrefix}
-          moduleAliases={moduleAliases}
-          onRequestClose={setClosingIssue}
-        />
+        {!usingSplitPreview && (
+          <IssueDrawer
+            modulePrefix={modulePrefix}
+            moduleAliases={moduleAliases}
+            onRequestClose={setClosingIssue}
+          />
+        )}
         <CreateIssueModal modulePrefix={modulePrefix} moduleAliases={moduleAliases} />
         <CloseIssueDialog issue={closingIssue} onDone={() => setClosingIssue(null)} />
         <Suspense fallback={null}>

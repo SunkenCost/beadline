@@ -12,7 +12,7 @@ export function AllActiveView() {
   const handleJump = async (workspacePath: string, issueId: string) => {
     setActiveModule("");
     await selectWorkspace(workspacePath);
-    setActiveView("board");
+    setActiveView("tasks");
     openDrawer(issueId);
   };
 

@@ -36,6 +36,7 @@ export function CommandPalette() {
   const setOpen = useUiStore((s) => s.setPaletteOpen);
   const {
     setActiveView,
+    setTasksMode,
     openDrawer,
     openCreateModal,
     setSettingsOpen,
@@ -112,11 +113,24 @@ export function CommandPalette() {
         onRun: () => setActiveView("mission"),
       },
       {
+        id: "v-list",
+        group: t.palette.groupViews,
+        label: `${t.nav.tasks} · ${t.board.viewList}`,
+        meta: "1",
+        onRun: () => {
+          setActiveView("tasks");
+          setTasksMode("list");
+        },
+      },
+      {
         id: "v-board",
         group: t.palette.groupViews,
-        label: t.nav.board,
-        meta: "1",
-        onRun: () => setActiveView("board"),
+        label: `${t.nav.tasks} · ${t.board.viewBoard}`,
+        meta: "B",
+        onRun: () => {
+          setActiveView("tasks");
+          setTasksMode("board");
+        },
       },
       {
         id: "v-epics",
@@ -131,13 +145,6 @@ export function CommandPalette() {
         label: t.nav.dag,
         meta: "3",
         onRun: () => setActiveView("dag"),
-      },
-      {
-        id: "v-list",
-        group: t.palette.groupViews,
-        label: t.nav.list,
-        meta: "4",
-        onRun: () => setActiveView("list"),
       },
       {
         id: "v-all",
@@ -202,6 +209,7 @@ export function CommandPalette() {
     syncGithub,
     setSettingsOpen,
     setActiveView,
+    setTasksMode,
     setActiveModule,
     selectWorkspace,
     openDrawer,

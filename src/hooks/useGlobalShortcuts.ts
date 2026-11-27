@@ -44,13 +44,18 @@ export function useGlobalShortcuts(focusSearch: () => void) {
       } else if (e.key === "m" || e.key === "M") {
         ui.setActiveView("mission");
       } else if (e.key === "1") {
-        ui.setActiveView("board");
+        ui.setActiveView("tasks");
       } else if (e.key === "2") {
         ui.setActiveView("epics");
       } else if (e.key === "3") {
         ui.setActiveView("dag");
-      } else if (e.key === "4") {
-        ui.setActiveView("list");
+      } else if (e.key === "b" || e.key === "B") {
+        if (ui.activeView === "tasks") {
+          ui.setTasksMode(ui.tasksMode === "list" ? "board" : "list");
+        } else {
+          ui.setActiveView("tasks");
+          ui.setTasksMode("board");
+        }
       } else if (e.key === "0") {
         ui.setActiveView("all-active");
       }

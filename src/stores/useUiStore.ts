@@ -1,7 +1,10 @@
 import { create } from "zustand";
 import type { BoardLane } from "@/types/ipc";
 
-export type ActiveView = "mission" | "all-active" | "board" | "epics" | "dag" | "list";
+export type ActiveView = "tasks" | "mission" | "all-active" | "epics" | "dag";
+export type TasksMode = "list" | "board";
+export type TasksFilter = "open" | "in_progress" | "ready" | "blocked" | "closed" | "all";
+export type TasksGroupBy = "status" | "epic" | "priority";
 export type BoardScope = "tasks" | "all";
 export type BoardGroupMode = "flat" | "epic";
 export type DagMode = "connected" | "active" | "all";
@@ -14,6 +17,9 @@ export interface ToastItem {
 
 interface UiState {
   activeView: ActiveView;
+  tasksMode: TasksMode;
+  tasksFilter: TasksFilter;
+  tasksGroupBy: TasksGroupBy;
   sidebarCollapsed: boolean;
   settingsOpen: boolean;
   paletteOpen: boolean;
@@ -31,6 +37,9 @@ interface UiState {
   toasts: ToastItem[];
 
   setActiveView: (view: ActiveView) => void;
+  setTasksMode: (mode: TasksMode) => void;
+  setTasksFilter: (filter: TasksFilter) => void;
+  setTasksGroupBy: (groupBy: TasksGroupBy) => void;
   toggleSidebar: () => void;
   setSettingsOpen: (open: boolean) => void;
   setPaletteOpen: (open: boolean) => void;
@@ -54,7 +63,10 @@ interface UiState {
 let toastSeq = 1;
 
 export const useUiStore = create<UiState>((set) => ({
-  activeView: "board",
+  activeView: "tasks",
+  tasksMode: "list",
+  tasksFilter: "open",
+  tasksGroupBy: "status",
   sidebarCollapsed: false,
   settingsOpen: false,
   paletteOpen: false,
@@ -72,6 +84,9 @@ export const useUiStore = create<UiState>((set) => ({
   toasts: [],
 
   setActiveView: (activeView) => set({ activeView }),
+  setTasksMode: (tasksMode) => set({ tasksMode }),
+  setTasksFilter: (tasksFilter) => set({ tasksFilter }),
+  setTasksGroupBy: (tasksGroupBy) => set({ tasksGroupBy }),
   toggleSidebar: () => set((s) => ({ sidebarCollapsed: !s.sidebarCollapsed })),
   setSettingsOpen: (settingsOpen) => set({ settingsOpen }),
   setPaletteOpen: (paletteOpen) => set({ paletteOpen }),
