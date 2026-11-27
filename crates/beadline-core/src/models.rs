@@ -185,7 +185,7 @@ pub struct CommentDto {
 }
 
 // ---------------------------------------------------------------------------
-// Live Runtime Leases & Mission Control Radar (independent snapshot channel)
+// Live Runtime Sessions, Persistent Pending Requests & Mission Control Radar
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -197,8 +197,63 @@ pub enum SessionState {
     Released,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum TelemetrySource {
+    Hook,
+    #[default]
+    Mcp,
+    Cli,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum TurnState {
+    #[default]
+    Running,
+    WaitingHuman,
+    IdleBetweenTurns,
+    Ended,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum SessionReachability {
+    #[default]
+    Active,
+    Idle,
+    Unconfirmed,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum PendingRequestKind {
+    Approval,
+    #[default]
+    Question,
+    ManualWait,
+}
+
+/// Persistent pending human decision (approval prompt or explicit question).
+/// Decoupled from liveness/heartbeat timers: NEVER expires silently after 2 minutes.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PendingHumanRequest {
+    pub request_id: String,
+    #[serde(default)]
+    pub kind: PendingRequestKind,
+    pub reason: String,
+    #[serde(default)]
+    pub created_at: String,
+    #[serde(default)]
+    pub source: TelemetrySource,
+    #[serde(default)]
+    pub tool_name: Option<String>,
+}
+
 /// Per-session lease stored independently in `<runtime_dir>/<session_id>.json`.
-/// Never shares a single lock or file with other concurrent agents.
+/// Separates task semantics (`issue_id`, `scope`), persistent human wait (`pending_request`),
+/// turn lifecycle (`turn_state`), and honest reachability (`reachability`).
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionLease {
@@ -216,11 +271,19 @@ pub struct SessionLease {
     #[serde(default)]
     pub agent: String,
     #[serde(default)]
+    pub source: TelemetrySource,
+    #[serde(default)]
     pub state: SessionState,
+    #[serde(default)]
+    pub turn_state: TurnState,
     #[serde(default)]
     pub summary: String,
     #[serde(default)]
     pub waiting_reason: Option<String>,
+    #[serde(default)]
+    pub pending_request: Option<PendingHumanRequest>,
+    #[serde(default)]
+    pub last_tool: Option<String>,
     #[serde(default)]
     pub scope: Vec<String>,
     #[serde(default)]
@@ -232,10 +295,15 @@ pub struct SessionLease {
     #[serde(default)]
     pub last_seen_at: String,
     #[serde(default)]
+    pub last_activity_at: String,
+    #[serde(default)]
     pub last_progress_at: String,
     #[serde(default)]
     pub expires_at: String,
-    /// Computed at read time when `now > expires_at` (never persisted as authoritative).
+    /// Computed at read time from `last_activity_at` / `turn_state`.
+    #[serde(default)]
+    pub reachability: SessionReachability,
+    /// Computed compatibility flag (`reachability == Unconfirmed`).
     #[serde(default)]
     pub stale_heartbeat: bool,
 }
@@ -260,7 +328,7 @@ pub enum AttributionSource {
     Unattributed,
 }
 
-/// Passively observed local Git worktree state (ground truth for dirty files).
+/// Passively observed local Git worktree state (dirty working tree + committed branch diff vs base).
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WorktreeActivity {
@@ -277,9 +345,20 @@ pub struct WorktreeActivity {
     pub observed_at_ms: u64,
     pub modified_count: usize,
     pub untracked_count: usize,
-    /// Bounded sample of repo-relative dirty paths for lean IPC payloads.
+    /// Bounded sample of uncommitted dirty paths for lean IPC payloads.
     pub dirty_sample: Vec<String>,
     pub truncated: bool,
+    /// Paths committed on this branch since `merge-base(base_ref, HEAD)`.
+    #[serde(default)]
+    pub committed_count: usize,
+    #[serde(default)]
+    pub committed_sample: Vec<String>,
+    #[serde(default)]
+    pub committed_truncated: bool,
+    #[serde(default)]
+    pub base_ref: Option<String>,
+    #[serde(default)]
+    pub branch_diff_status: ScanStatus,
     pub attribution: AttributionSource,
     pub session_ids: Vec<String>,
     pub linked_issue_ids: Vec<String>,
@@ -308,9 +387,13 @@ pub struct ParticipantRef {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ConflictKind {
-    /// Strongest: two distinct worktrees both have dirty edits to the exact same path.
+    /// Strongest: two distinct worktrees both have live dirty edits to the exact same path.
     SameFileDirty,
-    /// Medium: one worktree's real dirty file hits another participant's declared write scope.
+    /// Strong: two distinct worktrees touched the exact same path across committed (`merge-base..HEAD`) + dirty edits.
+    SameFileCommitted,
+    /// High-risk setup: 2+ active sessions share the exact same checkout directory (Git cannot separate edits).
+    SharedWorktree,
+    /// Medium: one worktree's dirty or committed path hits another participant's declared write scope.
     DirtyHitsDeclaredScope,
     /// Advisory: two active sessions/issues declare overlapping write scopes.
     DeclaredScopeOverlap,
@@ -323,6 +406,10 @@ pub struct ConflictEvidence {
     pub matched_scopes: Vec<String>,
     pub total_paths: usize,
     pub lockfile_only: bool,
+    #[serde(default)]
+    pub base_ref: Option<String>,
+    #[serde(default)]
+    pub evidence_note: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -342,11 +429,8 @@ pub struct BlockerHotspot {
     pub short_id: String,
     pub title: String,
     pub lane: BoardLane,
-    /// True if this blocker itself has no open upstream blockers (can be acted on right now).
     pub actionable: bool,
-    /// Count of blocked issues that become immediately unblocked once this issue closes.
     pub direct_unblocks: usize,
-    /// Deduplicated transitive count of open downstream issues affected.
     pub total_downstream: usize,
     pub downstream_ids: Vec<String>,
 }
@@ -356,6 +440,7 @@ pub struct BlockerHotspot {
 pub enum AttentionKind {
     WaitingHuman,
     FileOverlap,
+    SharedWorktree,
     ProgressStale,
     HeartbeatStale,
 }
@@ -373,12 +458,17 @@ pub struct AttentionItem {
     pub reason: String,
     pub age_minutes: u64,
     pub thread_url: Option<String>,
+    /// True when the pending request is still shown from last-known state while host reachability is unconfirmed.
+    #[serde(default)]
+    pub unconfirmed: bool,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RadarCoverage {
     pub scope_note: String,
+    #[serde(default)]
+    pub base_ref: Option<String>,
     pub scanned_worktrees: usize,
     pub total_worktrees: usize,
     pub failed_worktrees: usize,

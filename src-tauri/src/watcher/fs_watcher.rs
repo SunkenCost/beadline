@@ -21,14 +21,17 @@ struct ActiveWatch {
     path: String,
     _store_watcher: RecommendedWatcher,
     _runtime_watcher: Option<RecommendedWatcher>,
+    _git_meta_watcher: Option<RecommendedWatcher>,
     snapshot_task: JoinHandle<()>,
     radar_task: JoinHandle<()>,
+    git_radar_task: JoinHandle<()>,
 }
 
 impl Drop for ActiveWatch {
     fn drop(&mut self) {
         self.snapshot_task.abort();
         self.radar_task.abort();
+        self.git_radar_task.abort();
     }
 }
 
@@ -196,6 +199,7 @@ impl ActiveWatch {
 
         let (snap_tx, mut snap_rx) = mpsc::channel(1);
         let (radar_tx, mut radar_rx) = mpsc::channel(1);
+        let (git_tx, mut git_rx) = mpsc::channel(1);
 
         let runtime_inside_store = runtime_dir.starts_with(&store_dir);
 
@@ -211,8 +215,6 @@ impl ActiveWatch {
             },
         )?;
 
-        // When legacy `.beads/` is used inside a Git repo, runtime pulses live in
-        // `<git-common-dir>/beadline/runtime/pulses`, so attach a dedicated non-recursive watcher.
         let runtime_watcher = if !runtime_inside_store && runtime_dir.is_dir() {
             let radar_tx_ext = radar_tx.clone();
             watch_runtime_dir(&runtime_dir, move || {
@@ -221,6 +223,15 @@ impl ActiveWatch {
         } else {
             None
         };
+
+        // Lightweight Git ref & worktree metadata watcher (ONLY refs/heads + worktrees + HEAD,
+        // never recursive over source files) so commits & branch switches update committed-diff radar!
+        let git_meta_watcher = loc.git_common_dir.as_deref().and_then(|common| {
+            let git_tx_cb = git_tx.clone();
+            watch_git_refs(common, move || {
+                let _ = git_tx_cb.try_send(());
+            })
+        });
 
         let watch_path_snap = path.clone();
         let mgr_snap = Arc::clone(&workspace_mgr);
@@ -246,19 +257,38 @@ impl ActiveWatch {
 
         // Independent lease channel: NEVER triggers full Board snapshot or Git subprocesses!
         let watch_path_radar = path.clone();
+        let mgr_radar = Arc::clone(&workspace_mgr);
+        let settings_radar = Arc::clone(&settings);
+        let app_radar = app.clone();
         let radar_task = tokio::spawn(async move {
             while radar_rx.recv().await.is_some() {
                 tokio::time::sleep(Duration::from_millis(200)).await;
                 let _ = radar_rx.try_recv();
 
-                let cur_rt = workspace_mgr.runtime_fingerprint_for(&watch_path_radar);
+                let cur_rt = mgr_radar.runtime_fingerprint_for(&watch_path_radar);
                 if cur_rt == last_rt_fp {
                     continue;
                 }
                 last_rt_fp = cur_rt;
+                let cfg = settings_radar.lock().await.clone();
+                if let Ok(radar) = mgr_radar
+                    .get_radar_snapshot(&watch_path_radar, &cfg, false)
+                    .await
+                {
+                    let _ = app_radar.emit(RADAR_UPDATED_EVENT, &radar);
+                }
+            }
+        });
+
+        // Debounced Git ref/worktree refresh channel (updates committed + dirty overlap truth on commit/branch switch)
+        let watch_path_git = path.clone();
+        let git_radar_task = tokio::spawn(async move {
+            while git_rx.recv().await.is_some() {
+                tokio::time::sleep(Duration::from_millis(450)).await;
+                let _ = git_rx.try_recv();
                 let cfg = settings.lock().await.clone();
                 if let Ok(radar) = workspace_mgr
-                    .get_radar_snapshot(&watch_path_radar, &cfg, false)
+                    .get_radar_snapshot(&watch_path_git, &cfg, true)
                     .await
                 {
                     let _ = app.emit(RADAR_UPDATED_EVENT, &radar);
@@ -270,8 +300,10 @@ impl ActiveWatch {
             path,
             _store_watcher: store_watcher,
             _runtime_watcher: runtime_watcher,
+            _git_meta_watcher: git_meta_watcher,
             snapshot_task,
             radar_task,
+            git_radar_task,
         })
     }
 }
@@ -427,6 +459,56 @@ fn watch_store_dir(
             None
         }
     }
+}
+
+fn watch_git_refs(
+    git_common_dir: &Path,
+    on_git_change: impl Fn() + Send + 'static,
+) -> Option<RecommendedWatcher> {
+    let refs_heads = git_common_dir.join("refs").join("heads");
+    let worktrees_dir = git_common_dir.join("worktrees");
+    let root_clone = git_common_dir.to_path_buf();
+
+    let handler = move |result: Result<Event, notify::Error>| {
+        if let Ok(event) = result {
+            if matches!(event.kind, EventKind::Access(_)) {
+                return;
+            }
+            let relevant = event.paths.iter().any(|p| {
+                let Ok(rel) = p.strip_prefix(&root_clone) else {
+                    return false;
+                };
+                if is_ignored_temp_or_lock(rel) {
+                    return false;
+                }
+                let text = rel.to_string_lossy().replace('\\', "/");
+                text == "HEAD"
+                    || text == "index"
+                    || text.starts_with("refs/heads/")
+                    || (text.starts_with("worktrees/")
+                        && (text.ends_with("/HEAD") || text.ends_with("/index")))
+            });
+            if relevant {
+                on_git_change();
+            }
+        }
+    };
+
+    let mut watcher = notify::recommended_watcher(handler).ok()?;
+    let mut attached = false;
+    if watcher
+        .watch(git_common_dir, RecursiveMode::NonRecursive)
+        .is_ok()
+    {
+        attached = true;
+    }
+    if refs_heads.is_dir() && watcher.watch(&refs_heads, RecursiveMode::Recursive).is_ok() {
+        attached = true;
+    }
+    if worktrees_dir.is_dir() && watcher.watch(&worktrees_dir, RecursiveMode::Recursive).is_ok() {
+        attached = true;
+    }
+    if attached { Some(watcher) } else { None }
 }
 
 fn watch_runtime_dir(

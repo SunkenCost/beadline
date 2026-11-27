@@ -1,3 +1,4 @@
+mod hooks;
 mod mcp;
 
 use beadline_core::error::{CoreError, CoreResult};
@@ -156,6 +157,7 @@ fn dispatch(opts: &GlobalOpts, args: &[String]) -> CoreResult<()> {
         "import" => cmd_import(opts, tail),
         "export" => cmd_export(opts, tail),
         "doctor" => cmd_doctor(opts),
+        "hook" => cmd_hook(opts, tail),
         "mcp" => cmd_mcp(opts),
         other => Err(CoreError::InvalidOperation(format!(
             "unknown subcommand '{other}' (run `bl --help`)"
@@ -832,6 +834,18 @@ fn cmd_doctor(opts: &GlobalOpts) -> CoreResult<()> {
     Ok(())
 }
 
+fn cmd_hook(opts: &GlobalOpts, args: &[String]) -> CoreResult<()> {
+    let harness = args
+        .first()
+        .filter(|s| !s.starts_with('-'))
+        .map(String::as_str)
+        .or(opts.harness.as_deref())
+        .unwrap_or("auto");
+    let event_override = take_flag_value(args, &["--event", "-e"]);
+    hooks::handle_hook_from_reader(harness, event_override.as_deref(), &opts.repo, io::stdin().lock());
+    Ok(())
+}
+
 fn cmd_mcp(opts: &GlobalOpts) -> CoreResult<()> {
     let mut server = McpServer::new(
         opts.repo.clone(),
@@ -886,6 +900,7 @@ fn print_help() {
            claim <id> [--scope P] [--summary]  Claim task for current agent session\n  \
            pulse --state working|waiting_human|released [--summary S] [--waiting-reason R]\n  \
            finish <id> --summary S [--ref R]   Close task with delivery proof & show unblocked\n  \
+           hook <harness> [--event E]          Ingest native lifecycle hook JSON from stdin (fail-open)\n  \
            mcp                                 Start native stdio MCP server (5 core tools)\n\n\
          MANAGEMENT & EXCHANGE:\n  \
            init [--prefix P]                   Initialize shared native store (<git-common-dir>/beadline)\n  \

@@ -592,31 +592,77 @@ export function SettingsModal() {
             </div>
 
             {activeSnippet && (
-              <div className="space-y-2 rounded-[var(--radius-md)] border border-[var(--border)] bg-[var(--surface-subtle)] p-3">
-                <div className="flex items-center justify-between gap-2">
-                  <span className="font-mono-tabular text-[11px] text-[var(--fg-3)]">
-                    {activeSnippet.targetFile}
-                  </span>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={() => {
-                      void navigator.clipboard?.writeText(activeSnippet.code);
-                      showNotice("ok", t.settings.copiedConfig);
-                    }}
-                  >
-                    <Copy className="h-3 w-3" />
-                    <span>{t.settings.copyConfig}</span>
-                  </Button>
-                </div>
-                <pre className="overflow-x-auto rounded-[var(--radius-sm)] border border-[var(--border-subtle)] bg-[var(--surface)] p-2.5 font-mono-tabular text-[11px] leading-relaxed text-[var(--fg)] select-text">
-                  {activeSnippet.code}
-                </pre>
-                {activeSnippet.id === "t3-cli" && (
-                  <p className="text-[11px] leading-relaxed text-[var(--fg-3)]">
-                    {t.settings.t3Note}
-                  </p>
+              <div className="space-y-3">
+                {activeSnippet.hookCode && activeSnippet.hookTargetFile && (
+                  <div className="space-y-2 rounded-[var(--radius-md)] border border-[var(--accent-border)] bg-[var(--accent-soft)]/25 p-3">
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="min-w-0">
+                        <div className="text-[12px] font-medium text-[var(--fg)]">
+                          {t.settings.hookSectionTitle}
+                        </div>
+                        <div className="font-mono-tabular text-[10.5px] text-[var(--fg-3)]">
+                          {activeSnippet.hookTargetFile}
+                        </div>
+                      </div>
+                      <Button
+                        size="sm"
+                        variant="primary"
+                        onClick={() => {
+                          void navigator.clipboard?.writeText(activeSnippet.hookCode ?? "");
+                          showNotice("ok", t.settings.copiedConfig);
+                        }}
+                      >
+                        <Copy className="h-3 w-3" />
+                        <span>{t.settings.copyConfig}</span>
+                      </Button>
+                    </div>
+                    <p className="text-[11px] leading-relaxed text-[var(--fg-2)]">
+                      {t.settings.hookSectionDesc}
+                    </p>
+                    <pre className="max-h-40 overflow-auto rounded-[var(--radius-sm)] border border-[var(--border-subtle)] bg-[var(--surface)] p-2.5 font-mono-tabular text-[11px] leading-relaxed text-[var(--fg)] select-text">
+                      {activeSnippet.hookCode}
+                    </pre>
+                    {activeSnippet.hookNote === "codex-trust" && (
+                      <p className="text-[11px] leading-relaxed text-[var(--warning)]">
+                        {t.settings.codexHookTrustNote}
+                      </p>
+                    )}
+                  </div>
                 )}
+
+                <div className="space-y-2 rounded-[var(--radius-md)] border border-[var(--border)] bg-[var(--surface-subtle)] p-3">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="min-w-0">
+                      <div className="text-[12px] font-medium text-[var(--fg)]">
+                        {activeSnippet.id === "t3-cli"
+                          ? t.settings.cliFallbackTitle
+                          : t.settings.mcpSectionTitle}
+                      </div>
+                      <span className="font-mono-tabular text-[10.5px] text-[var(--fg-3)]">
+                        {activeSnippet.targetFile}
+                      </span>
+                    </div>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => {
+                        void navigator.clipboard?.writeText(activeSnippet.code);
+                        showNotice("ok", t.settings.copiedConfig);
+                      }}
+                    >
+                      <Copy className="h-3 w-3" />
+                      <span>{t.settings.copyConfig}</span>
+                    </Button>
+                  </div>
+                  <pre className="overflow-x-auto rounded-[var(--radius-sm)] border border-[var(--border-subtle)] bg-[var(--surface)] p-2.5 font-mono-tabular text-[11px] leading-relaxed text-[var(--fg)] select-text">
+                    {activeSnippet.code}
+                  </pre>
+                  {activeSnippet.id === "t3-cli" && (
+                    <p className="text-[11px] leading-relaxed text-[var(--fg-3)]">
+                      {t.settings.t3Note}
+                    </p>
+                  )}
+                </div>
               </div>
             )}
           </div>

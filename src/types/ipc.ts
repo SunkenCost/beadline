@@ -197,6 +197,23 @@ export interface CommentDto {
 
 export type SessionState = "working" | "waiting_human" | "released";
 
+export type TelemetrySource = "hook" | "mcp" | "cli";
+
+export type TurnState = "running" | "waiting-human" | "idle-between-turns" | "ended";
+
+export type SessionReachability = "active" | "idle" | "unconfirmed";
+
+export type PendingRequestKind = "approval" | "question" | "manual-wait";
+
+export interface PendingHumanRequest {
+  requestId: string;
+  kind: PendingRequestKind;
+  reason: string;
+  createdAt: string;
+  source: TelemetrySource;
+  toolName: string | null;
+}
+
 export interface SessionLease {
   sessionId: string;
   issueId: string | null;
@@ -205,16 +222,22 @@ export interface SessionLease {
   branch: string | null;
   harness: string;
   agent: string;
+  source?: TelemetrySource;
   state: SessionState;
+  turnState?: TurnState;
   summary: string;
   waitingReason: string | null;
+  pendingRequest?: PendingHumanRequest | null;
+  lastTool?: string | null;
   scope: string[];
   threadUrl: string | null;
   seq: number;
   startedAt: string;
   lastSeenAt: string;
+  lastActivityAt?: string;
   lastProgressAt: string;
   expiresAt: string;
+  reachability?: SessionReachability;
   staleHeartbeat: boolean;
 }
 
@@ -238,6 +261,11 @@ export interface WorktreeActivity {
   untrackedCount: number;
   dirtySample: string[];
   truncated: boolean;
+  committedCount?: number;
+  committedSample?: string[];
+  committedTruncated?: boolean;
+  baseRef?: string | null;
+  branchDiffStatus?: ScanStatus;
   attribution: AttributionSource;
   sessionIds: string[];
   linkedIssueIds: string[];
@@ -257,6 +285,8 @@ export interface ParticipantRef {
 
 export type ConflictKind =
   | "same-file-dirty"
+  | "same-file-committed"
+  | "shared-worktree"
   | "dirty-hits-declared-scope"
   | "declared-scope-overlap";
 
@@ -265,6 +295,8 @@ export interface ConflictEvidence {
   matchedScopes: string[];
   totalPaths: number;
   lockfileOnly: boolean;
+  baseRef?: string | null;
+  evidenceNote?: string | null;
 }
 
 export interface ConflictAlert {
@@ -286,7 +318,12 @@ export interface BlockerHotspot {
   downstreamIds: string[];
 }
 
-export type AttentionKind = "waiting-human" | "file-overlap" | "progress-stale" | "heartbeat-stale";
+export type AttentionKind =
+  | "waiting-human"
+  | "file-overlap"
+  | "shared-worktree"
+  | "progress-stale"
+  | "heartbeat-stale";
 
 export interface AttentionItem {
   id: string;
@@ -299,10 +336,12 @@ export interface AttentionItem {
   reason: string;
   ageMinutes: number;
   threadUrl: string | null;
+  unconfirmed?: boolean;
 }
 
 export interface RadarCoverage {
   scopeNote: string;
+  baseRef?: string | null;
   scannedWorktrees: number;
   totalWorktrees: number;
   failedWorktrees: number;

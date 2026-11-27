@@ -35,8 +35,8 @@ When you run multiple AI coding agents concurrently across worktrees or reposito
 
 | | What you get |
 |---|---|
-| **Mission Control & Conflict Radar** | Evidence-graded 3-tier overlap radar (**same dirty file** > **dirty file hits declared scope** > **declared scope overlap**), passive `git --no-optional-locks status` worktree observation, unattributed edit alerts, and actionable root blocker ranking. |
-| **Native `bl` CLI & `bl mcp` Server** | Standalone `~1.6 MB` Rust binary. Five minimal MCP tools (`bl_ready`, `bl_show`, `bl_claim`, `bl_pulse`, `bl_finish`) with idempotent `operationId`, optimistic `rev` checks, structured delivery proof, and 1-click config snippets in Settings. |
+| **Mission Control & Conflict Radar** | Evidence-graded overlap radar (**same dirty file** > **cross-branch committed `merge-base..HEAD` + dirty overlap** > **shared checkout warning** > **declared scope hits**), persistent approval/waiting alerts that never silently expire, and actionable root blocker ranking. |
+| **Native Hooks + `bl` CLI & `bl mcp`** | Standalone `~1.6 MB` Rust binary. Native fail-open `bl hook` adapters for **Claude Code, Codex CLI, Cursor, and Antigravity** auto-discover sessions & approval prompts without relying on LLM memory; 5 minimal MCP tools (`bl_ready`, `bl_show`, `bl_claim`, `bl_pulse`, `bl_finish`) handle task linkage and structured delivery proof. |
 | **6 Focused Views** | **Mission Control**, **Kanban Board** (with single highest-priority runtime badge per card), **Epics**, interactive **Dependency Graph (DAG)**, **All Issues**, and cross-repo **All Active**. |
 | **Cross-Worktree Shared Store** | All worktrees of a Git repo share one OS-locked store in `<git-common-dir>/beadline/` with safe atomic replacement (never deletes target before commit). |
 | **AI Handoff & Context** | One-click **Copy Agent Prompt** embedding why/acceptance/scope plus `bl_claim` / `bl_pulse` / `bl_finish` protocol instructions; auto-detects branches, commits, PRs, worktrees, and deep links. |

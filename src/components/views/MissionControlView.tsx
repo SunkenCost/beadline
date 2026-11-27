@@ -65,7 +65,9 @@ export function MissionControlView() {
   const unattributedDirtyWorktrees = useMemo(() => {
     if (!radar) return [];
     return radar.worktrees.filter(
-      (wt) => wt.attribution === "unattributed" && (wt.modifiedCount > 0 || wt.untrackedCount > 0),
+      (wt) =>
+        wt.attribution === "unattributed" &&
+        (wt.modifiedCount > 0 || wt.untrackedCount > 0 || (wt.committedCount ?? 0) > 0),
     );
   }, [radar]);
 
@@ -116,7 +118,10 @@ export function MissionControlView() {
         return (
           <span className="inline-flex items-center gap-1 rounded-[var(--radius-xs)] border border-[var(--accent-border)] bg-[var(--accent-soft)] px-1.5 py-0.5 text-[11px] font-medium text-[var(--accent)]">
             <HelpCircle className="h-3 w-3" />
-            <span>{t.mission.kindWaitingHuman}</span>
+            <span>
+              {t.mission.kindWaitingHuman}
+              {item.unconfirmed ? ` (${t.mission.unconfirmedWaitNote})` : ""}
+            </span>
           </span>
         );
       case "file-overlap":
@@ -124,6 +129,13 @@ export function MissionControlView() {
           <span className="inline-flex items-center gap-1 rounded-[var(--radius-xs)] border border-[var(--danger)]/35 bg-[var(--danger)]/10 px-1.5 py-0.5 text-[11px] font-medium text-[var(--danger)]">
             <ShieldAlert className="h-3 w-3" />
             <span>{t.mission.kindFileOverlap}</span>
+          </span>
+        );
+      case "shared-worktree":
+        return (
+          <span className="inline-flex items-center gap-1 rounded-[var(--radius-xs)] border border-[var(--warning)]/35 bg-[var(--warning)]/10 px-1.5 py-0.5 text-[11px] font-medium text-[var(--warning)]">
+            <AlertTriangle className="h-3 w-3" />
+            <span>{t.mission.kindSharedWorktree}</span>
           </span>
         );
       case "progress-stale":
@@ -152,6 +164,21 @@ export function MissionControlView() {
       return (
         <span className="inline-flex items-center gap-1 rounded-[var(--radius-xs)] border border-[var(--danger)]/35 bg-[var(--danger)]/10 px-1.5 py-0.5 text-[11px] font-medium text-[var(--danger)]">
           {t.mission.tierSameFile}
+        </span>
+      );
+    }
+    if (c.kind === "same-file-committed") {
+      return (
+        <span className="inline-flex items-center gap-1 rounded-[var(--radius-xs)] border border-[var(--danger)]/35 bg-[var(--danger)]/10 px-1.5 py-0.5 text-[11px] font-medium text-[var(--danger)]">
+          {t.mission.tierSameFileCommitted}
+          {c.evidence.baseRef ? ` · ${c.evidence.baseRef}` : ""}
+        </span>
+      );
+    }
+    if (c.kind === "shared-worktree") {
+      return (
+        <span className="inline-flex items-center gap-1 rounded-[var(--radius-xs)] border border-[var(--warning)]/35 bg-[var(--warning)]/10 px-1.5 py-0.5 text-[11px] font-medium text-[var(--warning)]">
+          {t.mission.tierSharedWorktree}
         </span>
       );
     }
@@ -187,7 +214,7 @@ export function MissionControlView() {
                   ? t.mission.coverageStale
                   : coverage?.scanStatus === "partial"
                     ? t.mission.coveragePartial
-                    : `${t.mission.coveragePrefix} · ${coverage?.scannedWorktrees ?? 0}/${coverage?.totalWorktrees ?? 0} ${t.mission.coverageWorktrees}`}
+                    : `${t.mission.coveragePrefix}${coverage?.baseRef ? ` (${coverage.baseRef})` : ""} · ${coverage?.scannedWorktrees ?? 0}/${coverage?.totalWorktrees ?? 0} ${t.mission.coverageWorktrees}`}
             </span>
           </div>
 
@@ -346,21 +373,25 @@ export function MissionControlView() {
               ) : (
                 sessions.map((s) => {
                   const issue = s.issueId ? byId[s.issueId] : undefined;
-                  const ageMin = formatAgeMinutes(s.lastSeenAt);
+                  const ageMin = formatAgeMinutes(s.lastActivityAt || s.lastSeenAt);
+                  const hasPending = Boolean(s.pendingRequest) || s.state === "waiting_human";
                   return (
                     <div key={s.sessionId} className="space-y-1.5 px-4 py-3 text-[12px]">
                       <div className="flex items-center gap-2">
                         <span
                           className={`h-2 w-2 shrink-0 rounded-full ${
-                            s.staleHeartbeat
-                              ? "bg-[var(--fg-3)]"
-                              : s.state === "waiting_human"
-                                ? "bg-[var(--warning)]"
-                                : "bg-[var(--success)]"
+                            hasPending
+                              ? "bg-[var(--warning)]"
+                              : s.reachability === "unconfirmed" || s.staleHeartbeat
+                                ? "bg-[var(--fg-3)]"
+                                : s.turnState === "idle-between-turns"
+                                  ? "bg-[var(--fg-3)]"
+                                  : "bg-[var(--success)]"
                           }`}
                         />
                         <span className="rounded-[var(--radius-xs)] border border-[var(--border)] bg-[var(--surface-subtle)] px-1.5 py-0.5 font-mono-tabular text-[10.5px] text-[var(--fg-2)]">
                           {s.harness}
+                          {s.source ? ` · ${s.source}` : ""}
                         </span>
                         {issue ? (
                           <button
@@ -374,8 +405,11 @@ export function MissionControlView() {
                             {issue.title}
                           </button>
                         ) : (
-                          <span className="min-w-0 flex-1 truncate font-mono-tabular text-[11.5px] text-[var(--fg-2)]">
-                            {s.sessionId}
+                          <span className="min-w-0 flex-1 truncate text-[11.5px] text-[var(--fg-2)]">
+                            {t.mission.unlinkedSession}
+                            <span className="ml-1.5 font-mono-tabular text-[10.5px] text-[var(--fg-3)]">
+                              {s.sessionId}
+                            </span>
                           </span>
                         )}
                         <span className="shrink-0 font-mono-tabular text-[11px] text-[var(--fg-3)]">
@@ -384,11 +418,12 @@ export function MissionControlView() {
                         </span>
                       </div>
 
-                      {s.summary && (
+                      {(s.pendingRequest?.reason || s.waitingReason || s.summary) && (
                         <div className="pl-4 text-[12px] text-[var(--fg-2)]">
-                          {s.state === "waiting_human" && s.waitingReason
-                            ? s.waitingReason
-                            : s.summary}
+                          {s.pendingRequest?.reason ??
+                            (s.state === "waiting_human" && s.waitingReason
+                              ? s.waitingReason
+                              : s.summary)}
                         </div>
                       )}
 
@@ -397,7 +432,10 @@ export function MissionControlView() {
                           <GitBranch className="h-3 w-3" />
                           <span>{s.branch ?? t.mission.detachedHead}</span>
                         </span>
-                        {s.staleHeartbeat && (
+                        {s.turnState === "idle-between-turns" && !hasPending && (
+                          <span>{t.mission.idleBetweenTurns}</span>
+                        )}
+                        {(s.reachability === "unconfirmed" || s.staleHeartbeat) && (
                           <span className="text-[var(--warning)]">{t.mission.staleTelemetry}</span>
                         )}
                         <div className="ml-auto flex items-center gap-1.5">
@@ -442,6 +480,10 @@ export function MissionControlView() {
                 <div className="space-y-2">
                   {unattributedDirtyWorktrees.map((wt) => {
                     const totalDirty = wt.modifiedCount + wt.untrackedCount;
+                    const totalCommitted = wt.committedCount ?? 0;
+                    const previewPaths =
+                      wt.dirtySample.length > 0 ? wt.dirtySample : (wt.committedSample ?? []);
+                    const totalFiles = totalDirty > 0 ? totalDirty : totalCommitted;
                     return (
                       <div
                         key={wt.worktreeId}
@@ -453,7 +495,11 @@ export function MissionControlView() {
                             {wt.branch ?? `${t.mission.detachedHead} (${wt.head ?? "?"})`}
                           </span>
                           <span className="shrink-0 font-mono-tabular text-[11px] text-[var(--fg-3)]">
-                            {totalDirty} {t.mission.dirtyCount}
+                            {totalDirty > 0 ? `${totalDirty} ${t.mission.dirtyCount}` : ""}
+                            {totalDirty > 0 && totalCommitted > 0 ? " · " : ""}
+                            {totalCommitted > 0
+                              ? `${totalCommitted} ${t.mission.committedCount}`
+                              : ""}
                           </span>
                           <button
                             type="button"
@@ -468,9 +514,9 @@ export function MissionControlView() {
                             <FolderOpen className="h-3.5 w-3.5" />
                           </button>
                         </div>
-                        {wt.dirtySample.length > 0 && (
+                        {previewPaths.length > 0 && (
                           <div className="mt-1 flex flex-wrap gap-1 font-mono-tabular text-[10.5px] text-[var(--fg-3)]">
-                            {wt.dirtySample.slice(0, 3).map((p) => (
+                            {previewPaths.slice(0, 3).map((p) => (
                               <span
                                 key={p}
                                 className="rounded-[var(--radius-xs)] bg-[var(--surface-subtle)] px-1.5 py-0.5"
@@ -478,8 +524,8 @@ export function MissionControlView() {
                                 {p}
                               </span>
                             ))}
-                            {totalDirty > 3 && (
-                              <span className="px-1 py-0.5">+{totalDirty - 3}</span>
+                            {totalFiles > 3 && (
+                              <span className="px-1 py-0.5">+{totalFiles - 3}</span>
                             )}
                           </div>
                         )}

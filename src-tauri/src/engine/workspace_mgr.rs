@@ -12,7 +12,7 @@ use crate::models::workspace::{
     CrossProjectActiveItem, ModuleAliasConfig, WorkspaceEntry, WorkspaceListResponse,
     WorkspaceSummary,
 };
-use beadline_core::git_radar::{compute_radar_snapshot, ObservedWorktree};
+use beadline_core::git_radar::{compute_radar_snapshot_with_cache, ObservedWorktree};
 use beadline_core::jsonl_reader::{
     compute_fingerprint, dolt_state_token, file_mtime_ms, latest_dolt_mtime_ms,
     read_workspace_snapshot_for_location,
@@ -56,6 +56,7 @@ struct ExportRecord {
 
 struct CachedRadar {
     observed_worktrees: Vec<ObservedWorktree>,
+    committed_diff_cache: HashMap<(String, String), Vec<String>>,
     last_snapshot: RadarSnapshot,
 }
 
@@ -406,9 +407,12 @@ impl WorkspaceManager {
             .map_err(|e| AppError::Internal(format!("locator join error: {e}")))??;
 
         let cache_key = loc.repo_id.clone();
-        let prev_observed = {
+        let (prev_observed, mut committed_cache) = {
             let cache = self.radar_cache.lock().await;
-            cache.get(&cache_key).map(|c| c.observed_worktrees.clone())
+            match cache.get(&cache_key) {
+                Some(c) => (Some(c.observed_worktrees.clone()), c.committed_diff_cache.clone()),
+                None => (None, HashMap::new()),
+            }
         };
 
         let effective_scan_git = scan_git || prev_observed.is_none();
@@ -423,7 +427,7 @@ impl WorkspaceManager {
             None
         };
 
-        let (radar, observed) = tokio::task::spawn_blocking(move || {
+        let (radar, observed, next_committed_cache) = tokio::task::spawn_blocking(move || {
             let issues = if loc.has_store {
                 read_workspace_snapshot_for_location(
                     &loc,
@@ -438,13 +442,19 @@ impl WorkspaceManager {
             } else {
                 Vec::new()
             };
-            compute_radar_snapshot(
+            let (radar, observed) = compute_radar_snapshot_with_cache(
                 &loc,
                 &issues,
                 generation,
                 effective_scan_git,
                 prev_observed.as_deref(),
-            )
+                &mut committed_cache,
+            );
+            // Bound cache size so long-lived sessions stay lean
+            if committed_cache.len() > 256 {
+                committed_cache.clear();
+            }
+            (radar, observed, committed_cache)
         })
         .await
         .map_err(|e| AppError::Internal(format!("radar compute join error: {e}")))?;
@@ -455,6 +465,7 @@ impl WorkspaceManager {
                 cache_key,
                 CachedRadar {
                     observed_worktrees: observed,
+                    committed_diff_cache: next_committed_cache,
                     last_snapshot: radar.clone(),
                 },
             );

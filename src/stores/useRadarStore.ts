@@ -66,17 +66,20 @@ function buildIndices(snap: RadarSnapshot): {
   for (const issueId of allIssueIds) {
     const sessions = sessionsByIssueId[issueId] ?? [];
     const conflicts = conflictsByIssueId[issueId] ?? [];
-    const live = sessions.filter((s) => !s.staleHeartbeat);
-    const waiting = live.find((s) => s.state === "waiting_human");
+    const live = sessions.filter((s) => s.reachability !== "unconfirmed" && !s.staleHeartbeat);
+    // Persistent pendingRequest takes top priority even if reachability became unconfirmed!
+    const waiting = sessions.find((s) => Boolean(s.pendingRequest) || s.state === "waiting_human");
     const severeConflict = conflicts.find(
-      (c) => c.kind === "same-file-dirty" && !c.evidence.lockfileOnly,
+      (c) =>
+        (c.kind === "same-file-dirty" || c.kind === "same-file-committed") &&
+        !c.evidence.lockfileOnly,
     );
 
     if (waiting) {
       badgeByIssueId[issueId] = {
         kind: "waiting",
         label: waiting.harness,
-        sessionCount: live.length,
+        sessionCount: Math.max(live.length, 1),
       };
     } else if (severeConflict) {
       badgeByIssueId[issueId] = {
