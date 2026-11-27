@@ -1,9 +1,10 @@
-import { Check, ChevronDown, ChevronRight } from "lucide-react";
-import { useMemo, useState } from "react";
+import { Check, ChevronDown, ChevronLeft, ChevronRight, Play, Plus, Sparkles } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { AssigneeDot, ModuleInlineList, PriorityGlyph, StatusRing } from "@/components/ui/Icons";
 import { useT } from "@/i18n";
 import { extractPlainSummary, isClosedIterationRound, shortParentLabel } from "@/lib/human-context";
 import { formatIpcError } from "@/lib/ipc";
+import { buildAgentPrompt } from "@/lib/prompt-builder";
 import { useRadarStore } from "@/stores/useRadarStore";
 import { useSettingsStore } from "@/stores/useSettingsStore";
 import { useUiStore } from "@/stores/useUiStore";
@@ -22,13 +23,32 @@ export interface BoardViewProps {
 export function BoardView({ issues, modulePrefix, moduleAliases, onRequestClose }: BoardViewProps) {
   const t = useT();
   const locale = useSettingsStore((s) => s.settings.language);
-  const { byId, updateIssue } = useWorkspaceStore();
+  const { snapshot, byId, createIssue, updateIssue } = useWorkspaceStore();
   const badgeByIssueId = useRadarStore((s) => s.badgeByIssueId);
-  const { boardGroupMode, hideClosedRounds, setHideClosedRounds, openDrawer, pushToast } =
-    useUiStore();
+  const {
+    activeModule,
+    boardGroupMode,
+    hideClosedRounds,
+    closedLaneCollapsed,
+    setHideClosedRounds,
+    toggleClosedLane,
+    openDrawer,
+    pushToast,
+  } = useUiStore();
+
   const [dragId, setDragId] = useState<string | null>(null);
   const [overTarget, setOverTarget] = useState<string | null>(null);
   const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({});
+  const [quickAddLane, setQuickAddLane] = useState<"in_progress" | "ready" | null>(null);
+  const [quickAddTitle, setQuickAddTitle] = useState("");
+  const [quickAddBusy, setQuickAddBusy] = useState(false);
+  const quickAddInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (quickAddLane) {
+      quickAddInputRef.current?.focus();
+    }
+  }, [quickAddLane]);
 
   const handleDrop = async (lane: BoardLane) => {
     setOverTarget(null);
@@ -50,12 +70,94 @@ export function BoardView({ issues, modulePrefix, moduleAliases, onRequestClose 
     }
   };
 
+  const handleQuickStart = async (it: IssueDto) => {
+    try {
+      await updateIssue({ issueId: it.id, status: "in_progress" });
+      pushToast(`${it.shortId} → ${t.lanes.in_progress}`, "ok");
+    } catch (err) {
+      pushToast(formatIpcError(err), "err");
+    }
+  };
+
+  const handleCopyPrompt = async (it: IssueDto) => {
+    if (!snapshot) return;
+    const prompt = buildAgentPrompt(it, snapshot, byId, locale);
+    await navigator.clipboard?.writeText(prompt);
+    pushToast(t.drawer.copiedPrompt, "ok");
+  };
+
+  const handleQuickAddSubmit = async (lane: "in_progress" | "ready") => {
+    const clean = quickAddTitle.trim();
+    if (!clean || quickAddBusy) return;
+    setQuickAddBusy(true);
+    try {
+      const id = await createIssue({
+        title: clean,
+        issueType: "task",
+        priority: 1,
+        status: lane === "in_progress" ? "in_progress" : "open",
+        labels: activeModule ? [activeModule] : [],
+        blockedBy: [],
+      });
+      setQuickAddTitle("");
+      pushToast(`${t.create.createdToast}: ${id ?? clean}`, "ok");
+    } catch (err) {
+      pushToast(formatIpcError(err), "err");
+    } finally {
+      setQuickAddBusy(false);
+    }
+  };
+
   const renderCard = (it: IssueDto, isClosed: boolean, showParent: boolean) => {
+    // Completed cards use a quiet, compact layout so active tasks stay visually dominant
+    if (isClosed) {
+      return (
+        <article
+          key={it.id}
+          draggable
+          onDragStart={(e) => {
+            setDragId(it.id);
+            e.dataTransfer.effectAllowed = "move";
+          }}
+          onDragEnd={() => {
+            setDragId(null);
+            setOverTarget(null);
+          }}
+          onClick={() => openDrawer(it.id)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" || e.key === " ") {
+              e.preventDefault();
+              openDrawer(it.id);
+            }
+          }}
+          className={`group min-w-0 overflow-hidden rounded-[var(--radius-sm)] border border-[var(--border-subtle)] bg-transparent px-2.5 py-2 transition-colors hover:border-[var(--border-strong)] hover:bg-[var(--surface)] cursor-pointer ${
+            dragId === it.id ? "opacity-40" : ""
+          }`}
+        >
+          <div className="flex min-w-0 items-center gap-1.5 text-[11px] text-[var(--fg-3)]">
+            <StatusRing lane="closed" size={11} />
+            <span className="shrink-0 whitespace-nowrap font-mono-tabular">{it.shortId}</span>
+            {it.issueType === "bug" && (
+              <span className="shrink-0 whitespace-nowrap text-[var(--danger)]/80">
+                {t.types.bug}
+              </span>
+            )}
+            <div className="ml-auto flex min-w-0 justify-end">
+              <AssigneeDot name={it.assignee} />
+            </div>
+          </div>
+          <div className="mt-1 line-clamp-2 break-words text-[12.5px] leading-[1.4] text-[var(--fg-2)] group-hover:text-[var(--fg)]">
+            {it.title}
+          </div>
+        </article>
+      );
+    }
+
     const openBlockers = it.openBlockedBy
       .map((bid) => byId[bid])
       .filter((x): x is IssueDto => Boolean(x));
     const unlocksCount = it.blocks.filter((uid) => byId[uid]?.status !== "closed").length;
-    const firstCommit = it.smart.commits[0];
+    const hasQuickStart = it.lane === "ready";
     const hasQuickDone = it.lane === "in_progress";
     const parentReadable =
       showParent && it.parentId && it.parentTitle && it.issueType !== "epic"
@@ -67,7 +169,6 @@ export function BoardView({ issues, modulePrefix, moduleAliases, onRequestClose 
       it.modules.length > 0 ||
       openBlockers.length > 0 ||
       (it.lane === "ready" && unlocksCount > 0) ||
-      Boolean(firstCommit) ||
       Boolean(parentReadable);
 
     return (
@@ -89,16 +190,12 @@ export function BoardView({ issues, modulePrefix, moduleAliases, onRequestClose 
             openDrawer(it.id);
           }
         }}
-        className={`group relative min-w-0 overflow-hidden rounded-[var(--radius-md)] border px-[var(--card-pad-x)] py-[var(--card-pad-y)] transition-[border-color,background-color,box-shadow] duration-100 cursor-pointer ${
+        className={`group relative min-w-0 overflow-hidden rounded-[var(--radius-md)] border border-[var(--border)] bg-[var(--surface)] px-[var(--card-pad-x)] py-[var(--card-pad-y)] transition-[border-color,background-color,box-shadow] duration-100 hover:border-[var(--border-strong)] hover:shadow-[var(--shadow-sm)] cursor-pointer ${
           dragId === it.id ? "opacity-40" : ""
-        } ${
-          isClosed
-            ? "border-[var(--border-subtle)] bg-transparent hover:border-[var(--border-strong)] hover:bg-[var(--surface)]"
-            : "border-[var(--border)] bg-[var(--surface)] hover:border-[var(--border-strong)] hover:shadow-[var(--shadow-sm)]"
         }`}
       >
-        {/* Row 1: Priority glyph + mono ID + optional Epic/Bug + #N + right slot */}
-        <div className="mb-1.5 flex min-h-[18px] min-w-0 items-center gap-1.5">
+        {/* Row 1: Priority glyph + mono ID + optional Epic/Bug + #N + right slot (assignee -> 1-click hover actions) */}
+        <div className="mb-1.5 flex min-h-[20px] min-w-0 items-center gap-1.5">
           <PriorityGlyph priority={it.priority} />
           <button
             type="button"
@@ -129,39 +226,60 @@ export function BoardView({ issues, modulePrefix, moduleAliases, onRequestClose 
           )}
 
           <div className="relative ml-auto flex min-h-[20px] min-w-0 flex-1 items-center justify-end">
-            <div
-              className={`flex min-w-0 max-w-full justify-end transition-opacity duration-100 ${hasQuickDone ? "group-hover:opacity-0" : ""}`}
-            >
+            <div className="flex min-w-0 max-w-full justify-end transition-opacity duration-100 group-hover:opacity-0">
               <AssigneeDot name={it.assignee} />
             </div>
-            {hasQuickDone && (
+
+            {/* 1-click hover quick action bar */}
+            <div className="pointer-events-none absolute top-1/2 right-0 flex -translate-y-1/2 items-center gap-1 opacity-0 transition-opacity duration-100 group-hover:pointer-events-auto group-hover:opacity-100">
               <button
                 type="button"
+                title={t.board.copyAiBtn}
                 onClick={(e) => {
                   e.stopPropagation();
-                  onRequestClose(it);
+                  void handleCopyPrompt(it);
                 }}
-                className="pointer-events-none absolute top-1/2 right-0 inline-flex h-5 -translate-y-1/2 items-center gap-0.5 whitespace-nowrap rounded-[var(--radius-xs)] border border-[var(--border)] bg-[var(--surface-hover)] px-1.5 text-[11px] text-[var(--fg-2)] opacity-0 transition-all duration-100 group-hover:pointer-events-auto group-hover:opacity-100 hover:border-[var(--success)] hover:bg-[var(--success-soft)] hover:text-[var(--success)] cursor-pointer"
+                className="inline-flex h-5 items-center gap-0.5 whitespace-nowrap rounded-[var(--radius-xs)] border border-[var(--border)] bg-[var(--surface)] px-1.5 text-[10.5px] text-[var(--fg-2)] hover:border-[var(--accent-border)] hover:bg-[var(--accent-soft)] hover:text-[var(--accent)] cursor-pointer"
               >
-                <Check className="h-3 w-3 shrink-0" />
-                <span>{t.actions.done}</span>
+                <Sparkles className="h-2.5 w-2.5 shrink-0" />
+                <span>AI</span>
               </button>
-            )}
+              {hasQuickStart && (
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    void handleQuickStart(it);
+                  }}
+                  className="inline-flex h-5 items-center gap-0.5 whitespace-nowrap rounded-[var(--radius-xs)] border border-[var(--accent-border)] bg-[var(--accent-soft)] px-1.5 text-[10.5px] font-medium text-[var(--accent)] hover:brightness-105 cursor-pointer"
+                >
+                  <Play className="h-2.5 w-2.5 shrink-0" />
+                  <span>{t.board.startBtn}</span>
+                </button>
+              )}
+              {hasQuickDone && (
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onRequestClose(it);
+                  }}
+                  className="inline-flex h-5 items-center gap-0.5 whitespace-nowrap rounded-[var(--radius-xs)] border border-[var(--border)] bg-[var(--surface-hover)] px-1.5 text-[10.5px] text-[var(--fg-2)] hover:border-[var(--success)] hover:bg-[var(--success-soft)] hover:text-[var(--success)] cursor-pointer"
+                >
+                  <Check className="h-3 w-3 shrink-0" />
+                  <span>{t.actions.done}</span>
+                </button>
+              )}
+            </div>
           </div>
         </div>
 
-        {/* Row 2: Clean 2-line title */}
-        <div
-          className={`line-clamp-2 break-words text-[13px] leading-[1.45] ${
-            isClosed
-              ? "font-normal text-[var(--fg-2)] group-hover:text-[var(--fg)]"
-              : "font-medium text-[var(--fg)]"
-          }`}
-        >
+        {/* Row 2: Crisp readable title */}
+        <div className="line-clamp-3 break-words text-[13px] font-medium leading-[1.45] text-[var(--fg)]">
           {it.title}
         </div>
 
-        {/* Row 3: Borderless inline metadata with human-readable parent epic name */}
+        {/* Row 3: Minimal high-signal footer */}
         {showFoot && (
           <div className="mt-2 flex min-w-0 flex-wrap items-center gap-x-2.5 gap-y-1 text-[11px] text-[var(--fg-3)]">
             {runtimeBadge && (
@@ -213,7 +331,7 @@ export function BoardView({ issues, modulePrefix, moduleAliases, onRequestClose 
                   e.stopPropagation();
                   openDrawer(openBlockers[0]?.id ?? it.id);
                 }}
-                className="shrink-0 whitespace-nowrap text-[11px] text-[var(--danger)] hover:underline underline-offset-2 cursor-pointer"
+                className="shrink-0 whitespace-nowrap font-medium text-[11px] text-[var(--danger)] hover:underline underline-offset-2 cursor-pointer"
               >
                 {t.board.blockedByPrefix} {openBlockers[0].shortId}
                 {openBlockers.length > 1 ? ` +${openBlockers.length - 1}` : ""}
@@ -221,10 +339,6 @@ export function BoardView({ issues, modulePrefix, moduleAliases, onRequestClose 
             ) : it.lane === "ready" && unlocksCount > 0 ? (
               <span className="shrink-0 whitespace-nowrap text-[11px] text-[var(--success)]">
                 {t.board.unlocksCount} {unlocksCount} {t.board.itemsUnit}
-              </span>
-            ) : firstCommit ? (
-              <span className="shrink-0 whitespace-nowrap font-mono-tabular text-[10.5px] text-[var(--fg-3)]">
-                {firstCommit}
               </span>
             ) : null}
 
@@ -332,7 +446,7 @@ export function BoardView({ issues, modulePrefix, moduleAliases, onRequestClose 
               )}
 
               {!isCollapsed && (
-                <div className="grid grid-cols-[repeat(4,minmax(240px,1fr))] overflow-x-auto border-t border-[var(--border-subtle)]">
+                <div className="grid grid-cols-[repeat(4,minmax(220px,1fr))] overflow-x-auto border-t border-[var(--border-subtle)]">
                   {LANES.map((lane) => {
                     const laneCardsAll = group.items.filter((x) => x.lane === lane);
                     const hiddenRounds =
@@ -393,9 +507,15 @@ export function BoardView({ issues, modulePrefix, moduleAliases, onRequestClose 
     );
   }
 
-  // Flat 4-column hairline Kanban
+  // Flat 4-column hairline Kanban with collapsible Closed rail & inline Quick Add
   return (
-    <div className="grid min-h-0 flex-1 grid-cols-[repeat(4,minmax(256px,1fr))] overflow-x-auto overflow-y-hidden">
+    <div
+      className={`grid min-h-0 flex-1 overflow-x-auto overflow-y-hidden ${
+        closedLaneCollapsed
+          ? "grid-cols-[repeat(3,minmax(220px,1fr))_44px]"
+          : "grid-cols-[repeat(4,minmax(220px,1fr))]"
+      }`}
+    >
       {LANES.map((lane) => {
         const allCards = issues.filter((it) => it.lane === lane);
         const hiddenRounds =
@@ -408,6 +528,42 @@ export function BoardView({ issues, modulePrefix, moduleAliases, onRequestClose 
             : allCards;
         const isClosed = lane === "closed";
         const isDragOver = overTarget === lane;
+        const canQuickAdd = lane === "in_progress" || lane === "ready";
+
+        if (isClosed && closedLaneCollapsed) {
+          return (
+            <button
+              key={lane}
+              type="button"
+              onClick={toggleClosedLane}
+              title={t.board.expandClosed}
+              onDragOver={(e) => {
+                e.preventDefault();
+                if (overTarget !== lane) setOverTarget(lane);
+              }}
+              onDragLeave={() => {
+                if (overTarget === lane) setOverTarget(null);
+              }}
+              onDrop={(e) => {
+                e.preventDefault();
+                void handleDrop(lane);
+              }}
+              className={`flex min-h-0 flex-col items-center gap-2.5 border-l border-[var(--border-subtle)] bg-[var(--surface-subtle)]/50 py-3 text-[var(--fg-3)] transition-colors hover:bg-[var(--surface-hover)] hover:text-[var(--fg)] cursor-pointer ${
+                isDragOver ? "bg-[var(--accent-soft)]" : ""
+              }`}
+            >
+              <ChevronLeft className="h-3.5 w-3.5 shrink-0" />
+              <StatusRing lane="closed" />
+              <span className="font-mono-tabular text-[11px]">{allCards.length}</span>
+              <span
+                className="text-[11.5px] font-medium tracking-wider"
+                style={{ writingMode: "vertical-rl" }}
+              >
+                {t.lanes.closed}
+              </span>
+            </button>
+          );
+        }
 
         return (
           <div
@@ -427,20 +583,43 @@ export function BoardView({ issues, modulePrefix, moduleAliases, onRequestClose 
               void handleDrop(lane);
             }}
             className={`flex min-h-0 min-w-0 flex-col border-r border-[var(--border-subtle)] last:border-r-0 transition-colors ${
-              isDragOver ? "bg-[var(--accent-soft)]" : ""
-            }`}
+              isClosed ? "bg-[var(--surface-subtle)]/35" : ""
+            } ${isDragOver ? "bg-[var(--accent-soft)]" : ""}`}
           >
-            {/* Flat hairline column header — zero boxes, zero redundant subtitles */}
-            <header className="flex shrink-0 items-center gap-2 whitespace-nowrap px-3.5 pt-3 pb-2">
+            {/* Flat hairline column header with subtle quick-add or collapse trigger */}
+            <header className="flex shrink-0 items-center gap-2 whitespace-nowrap px-3 pt-3 pb-2">
               <StatusRing lane={lane} />
               <h2 className="text-[12.5px] font-semibold text-[var(--fg)]">{t.lanes[lane]}</h2>
               <span className="font-mono-tabular text-[11.5px] text-[var(--fg-3)]">
                 {allCards.length}
               </span>
+              {canQuickAdd && (
+                <button
+                  type="button"
+                  title={t.board.quickAdd}
+                  onClick={() => {
+                    setQuickAddLane(lane);
+                    setQuickAddTitle("");
+                  }}
+                  className="ml-auto grid h-5 w-5 place-items-center rounded-[var(--radius-xs)] text-[var(--fg-3)] hover:bg-[var(--surface-hover)] hover:text-[var(--fg)] cursor-pointer"
+                >
+                  <Plus className="h-3.5 w-3.5" />
+                </button>
+              )}
+              {isClosed && (
+                <button
+                  type="button"
+                  title={t.board.collapseClosed}
+                  onClick={toggleClosedLane}
+                  className="ml-auto grid h-5 w-5 place-items-center rounded-[var(--radius-xs)] text-[var(--fg-3)] hover:bg-[var(--surface-hover)] hover:text-[var(--fg)] cursor-pointer"
+                >
+                  <ChevronRight className="h-3.5 w-3.5" />
+                </button>
+              )}
             </header>
 
             <div className="flex min-h-0 flex-1 flex-col gap-[var(--lane-gap)] overflow-y-auto px-2.5 pt-1 pb-4">
-              {cards.length === 0 && hiddenRounds === 0 ? (
+              {cards.length === 0 && hiddenRounds === 0 && quickAddLane !== lane ? (
                 <div className="py-6 text-center text-[12px] text-[var(--fg-3)]">
                   {t.laneEmpty[lane]}
                 </div>
@@ -458,6 +637,48 @@ export function BoardView({ issues, modulePrefix, moduleAliases, onRequestClose 
                   )}
                 </>
               )}
+
+              {/* Inline quick-add right inside active lanes */}
+              {canQuickAdd &&
+                (quickAddLane === lane ? (
+                  <div className="rounded-[var(--radius-md)] border border-[var(--accent-border)] bg-[var(--surface)] p-2 shadow-[var(--shadow-xs)]">
+                    <input
+                      ref={quickAddInputRef}
+                      type="text"
+                      value={quickAddTitle}
+                      disabled={quickAddBusy}
+                      onChange={(e) => setQuickAddTitle(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") {
+                          e.preventDefault();
+                          void handleQuickAddSubmit(lane);
+                        } else if (e.key === "Escape") {
+                          setQuickAddLane(null);
+                          setQuickAddTitle("");
+                        }
+                      }}
+                      onBlur={() => {
+                        if (!quickAddTitle.trim()) {
+                          setQuickAddLane(null);
+                        }
+                      }}
+                      placeholder={t.board.quickAddPlaceholder}
+                      className="w-full bg-transparent text-[12.5px] text-[var(--fg)] outline-none placeholder:text-[var(--fg-3)]"
+                    />
+                  </div>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setQuickAddLane(lane);
+                      setQuickAddTitle("");
+                    }}
+                    className="mt-0.5 flex items-center gap-1.5 rounded-[var(--radius-sm)] px-2 py-1.5 text-[11.5px] text-[var(--fg-3)] transition-colors hover:bg-[var(--surface-hover)] hover:text-[var(--fg-2)] cursor-pointer"
+                  >
+                    <Plus className="h-3.5 w-3.5 shrink-0" />
+                    <span>{t.board.quickAdd}</span>
+                  </button>
+                ))}
             </div>
           </div>
         );

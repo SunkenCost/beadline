@@ -264,23 +264,18 @@ export function IssueDrawer({ modulePrefix, moduleAliases, onRequestClose }: Iss
               void navigator.clipboard?.writeText(issue.id);
               pushToast(`${t.drawer.copiedId}: ${issue.id}`, "ok");
             }}
-            className="font-mono-tabular text-[11.5px] text-[var(--fg-3)] hover:text-[var(--fg)] cursor-pointer"
+            className="shrink-0 whitespace-nowrap font-mono-tabular text-[11.5px] text-[var(--fg-3)] hover:text-[var(--fg)] cursor-pointer"
           >
             {issue.shortId}
           </button>
           <span className="text-[var(--fg-3)]">·</span>
-          <span className="text-[12px] text-[var(--fg-2)]">
+          <span className="shrink-0 whitespace-nowrap text-[12px] text-[var(--fg-2)]">
             {t.types[issue.issueType as keyof typeof t.types] ?? issue.issueType}
           </span>
-          <span className="text-[var(--fg-3)]">·</span>
-          <span className="inline-flex items-center gap-1.5 text-[12px] text-[var(--fg-2)]">
-            <StatusRing lane={issue.lane} />
-            <span>{t.lanes[issue.lane]}</span>
-          </span>
 
-          <div className="ml-auto flex items-center gap-1">
-            <Button size="sm" variant="outline" onClick={() => void handleCopyPrompt()}>
-              <Sparkles className="h-3 w-3 text-[var(--accent)]" />
+          <div className="ml-auto flex items-center gap-1.5">
+            <Button size="sm" variant="accent" onClick={() => void handleCopyPrompt()}>
+              <Sparkles className="h-3 w-3" />
               <span>{t.actions.copyAgentPrompt}</span>
             </Button>
             <Button
@@ -295,7 +290,7 @@ export function IssueDrawer({ modulePrefix, moduleAliases, onRequestClose }: Iss
           </div>
         </header>
 
-        {/* Drawer Body */}
+        {/* Drawer Body — Content & 1-click actions FIRST, form fields below */}
         <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-5 py-4">
           <input
             type="text"
@@ -309,6 +304,63 @@ export function IssueDrawer({ modulePrefix, moduleAliases, onRequestClose }: Iss
             }}
             className="-mx-1.5 w-[calc(100%+12px)] rounded-[var(--radius-sm)] border border-transparent px-1.5 py-1 text-[16px] font-semibold text-[var(--fg)] focus:border-[var(--border-strong)] focus:bg-[var(--surface-subtle)]"
           />
+
+          {/* 1-Click Status & Priority Quick Switch Bar */}
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="inline-flex items-center rounded-[var(--radius-sm)] border border-[var(--border)] bg-[var(--surface-subtle)] p-0.5">
+              {(["open", "in_progress", "blocked", "closed"] as const).map((st) => {
+                const active = issue.status === st;
+                return (
+                  <button
+                    key={st}
+                    type="button"
+                    disabled={busy}
+                    onClick={() => {
+                      if (st === issue.status) return;
+                      if (st === "closed") {
+                        onRequestClose(issue);
+                      } else {
+                        void patch({ issueId: issue.id, status: st }, t.settings.savedHint);
+                      }
+                    }}
+                    className={`inline-flex h-6 items-center gap-1 whitespace-nowrap rounded-[var(--radius-xs)] px-2 text-[11.5px] transition-colors cursor-pointer ${
+                      active
+                        ? "bg-[var(--surface)] font-medium text-[var(--fg)] shadow-[var(--shadow-xs)]"
+                        : "text-[var(--fg-2)] hover:text-[var(--fg)]"
+                    }`}
+                  >
+                    <StatusRing lane={st === "open" ? "ready" : st} size={11} />
+                    <span>{t.statuses[st]}</span>
+                  </button>
+                );
+              })}
+            </div>
+
+            <div className="inline-flex items-center rounded-[var(--radius-sm)] border border-[var(--border)] bg-[var(--surface-subtle)] p-0.5">
+              {[0, 1, 2, 3, 4].map((p) => {
+                const active = issue.priority === p;
+                return (
+                  <button
+                    key={p}
+                    type="button"
+                    disabled={busy}
+                    onClick={() => {
+                      if (p !== issue.priority) {
+                        void patch({ issueId: issue.id, priority: p }, t.settings.savedHint);
+                      }
+                    }}
+                    className={`h-6 whitespace-nowrap rounded-[var(--radius-xs)] px-1.5 font-mono-tabular text-[11px] transition-colors cursor-pointer ${
+                      active
+                        ? "bg-[var(--surface)] font-semibold text-[var(--fg)] shadow-[var(--shadow-xs)]"
+                        : "text-[var(--fg-3)] hover:text-[var(--fg)]"
+                    }`}
+                  >
+                    P{p}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
 
           {/* Active Agent Sessions bound to this issue */}
           {boundSessions.length > 0 && (
@@ -514,277 +566,7 @@ export function IssueDrawer({ modulePrefix, moduleAliases, onRequestClose }: Iss
             </div>
           )}
 
-          {/* Properties grid */}
-          <div className="grid grid-cols-2 gap-2.5 rounded-[var(--radius-md)] border border-[var(--border)] bg-[var(--surface-subtle)] p-3">
-            <div className="flex flex-col gap-1">
-              <span className="text-[11px] font-medium text-[var(--fg-3)]">{t.drawer.status}</span>
-              <select
-                value={issue.status}
-                disabled={busy}
-                onChange={(e) =>
-                  void patch({ issueId: issue.id, status: e.target.value }, t.settings.savedHint)
-                }
-                className="h-7 rounded-[var(--radius-xs)] border border-[var(--border)] bg-[var(--surface)] px-2 text-[12px] text-[var(--fg)]"
-              >
-                <option value="open">{t.statuses.open}</option>
-                <option value="in_progress">{t.statuses.in_progress}</option>
-                <option value="blocked">{t.statuses.blocked}</option>
-                <option value="closed">{t.statuses.closed}</option>
-              </select>
-            </div>
-
-            <div className="flex flex-col gap-1">
-              <span className="text-[11px] font-medium text-[var(--fg-3)]">
-                {t.drawer.priority}
-              </span>
-              <select
-                value={issue.priority}
-                disabled={busy}
-                onChange={(e) =>
-                  void patch(
-                    { issueId: issue.id, priority: Number(e.target.value) },
-                    t.settings.savedHint,
-                  )
-                }
-                className="h-7 rounded-[var(--radius-xs)] border border-[var(--border)] bg-[var(--surface)] px-2 font-mono-tabular text-[12px] text-[var(--fg)]"
-              >
-                {[0, 1, 2, 3, 4].map((p) => (
-                  <option key={p} value={p}>
-                    P{p}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            <div className="flex flex-col gap-1">
-              <span className="text-[11px] font-medium text-[var(--fg-3)]">
-                {t.drawer.assignee}
-              </span>
-              <input
-                type="text"
-                value={assigneeDraft}
-                onChange={(e) => setAssigneeDraft(e.target.value)}
-                onBlur={() => {
-                  if (assigneeDraft.trim() !== issue.assignee) {
-                    void patch(
-                      { issueId: issue.id, assignee: assigneeDraft.trim() },
-                      t.settings.savedHint,
-                    );
-                  }
-                }}
-                placeholder={t.drawer.assigneePlaceholder}
-                className="h-7 rounded-[var(--radius-xs)] border border-[var(--border)] bg-[var(--surface)] px-2 font-mono-tabular text-[12px] text-[var(--fg)]"
-              />
-            </div>
-
-            <div className="flex flex-col gap-1">
-              <span className="text-[11px] font-medium text-[var(--fg-3)]">
-                {t.drawer.otherLabels}
-              </span>
-              <input
-                type="text"
-                value={labelsDraft}
-                onChange={(e) => setLabelsDraft(e.target.value)}
-                onBlur={() => {
-                  const others = labelsDraft
-                    .split(",")
-                    .map((s) => s.trim())
-                    .filter(Boolean);
-                  const merged = [...new Set([...ownMods, ...others])];
-                  if (merged.join(",") !== issue.labels.join(",")) {
-                    void patch({ issueId: issue.id, labels: merged }, t.settings.savedHint);
-                  }
-                }}
-                placeholder={t.drawer.labelsPlaceholder}
-                className="h-7 rounded-[var(--radius-xs)] border border-[var(--border)] bg-[var(--surface)] px-2 font-mono-tabular text-[12px] text-[var(--fg)]"
-              />
-            </div>
-
-            {snapshot.storageBackend === "native-jsonl" && (
-              <div className="col-span-2 flex flex-col gap-1">
-                <span className="text-[11px] font-medium text-[var(--fg-3)]">{t.drawer.scope}</span>
-                <input
-                  type="text"
-                  value={scopeDraft}
-                  onChange={(e) => setScopeDraft(e.target.value)}
-                  onBlur={() => {
-                    const nextScope = scopeDraft
-                      .split(",")
-                      .map((s) => s.trim())
-                      .filter(Boolean);
-                    if (nextScope.join(",") !== (issue.scope ?? []).join(",")) {
-                      void patch({ issueId: issue.id, scope: nextScope }, t.settings.savedHint);
-                    }
-                  }}
-                  placeholder={t.drawer.scopePlaceholder}
-                  className="h-7 rounded-[var(--radius-xs)] border border-[var(--border)] bg-[var(--surface)] px-2 font-mono-tabular text-[12px] text-[var(--fg)]"
-                />
-              </div>
-            )}
-
-            <div className="col-span-2 flex flex-col gap-1.5">
-              <span className="text-[11px] font-medium text-[var(--fg-3)]">{t.drawer.modules}</span>
-              <div className="flex flex-wrap items-center gap-1.5">
-                {modChoices.map((k) => {
-                  const m = resolveModule(k, prefix, locale, moduleAliases);
-                  const active = ownMods.has(k);
-                  return (
-                    <button
-                      key={k}
-                      type="button"
-                      disabled={busy}
-                      onClick={() => void handleToggleMod(k)}
-                      className={`inline-flex h-6 items-center gap-1.5 rounded-[var(--radius-xs)] border px-2 text-[11.5px] transition-colors cursor-pointer ${
-                        active
-                          ? "border-[var(--accent-border)] bg-[var(--accent-soft)] font-medium text-[var(--accent)]"
-                          : "border-[var(--border)] bg-[var(--surface)] text-[var(--fg-2)] hover:border-[var(--border-strong)] hover:text-[var(--fg)]"
-                      }`}
-                    >
-                      <span
-                        className="h-1.5 w-1.5 rounded-full"
-                        style={{ backgroundColor: m.color }}
-                      />
-                      <span>{m.label}</span>
-                    </button>
-                  );
-                })}
-                {newModOpen ? (
-                  <div className="inline-flex items-center gap-1">
-                    <input
-                      type="text"
-                      value={newModDraft}
-                      onChange={(e) => setNewModDraft(e.target.value)}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter") void handleAddCustomMod();
-                        if (e.key === "Escape") setNewModOpen(false);
-                      }}
-                      placeholder={t.drawer.newModulePrompt}
-                      className="h-6 w-28 rounded-[var(--radius-xs)] border border-[var(--border-strong)] bg-[var(--surface)] px-1.5 font-mono-tabular text-[11px]"
-                    />
-                    <Button size="sm" variant="primary" onClick={() => void handleAddCustomMod()}>
-                      {t.actions.add}
-                    </Button>
-                  </div>
-                ) : (
-                  <button
-                    type="button"
-                    onClick={() => setNewModOpen(true)}
-                    className="inline-flex h-6 items-center rounded-[var(--radius-xs)] border border-dashed border-[var(--border-strong)] px-2 text-[11.5px] text-[var(--fg-3)] hover:text-[var(--fg)] cursor-pointer"
-                  >
-                    {t.drawer.addModule}
-                  </button>
-                )}
-              </div>
-            </div>
-          </div>
-
-          {/* Parent Epic fallback if parent record isn't loaded in byId */}
-          {!parentIssue && issue.parentId && issue.parentTitle && (
-            <button
-              type="button"
-              onClick={() => openDrawer(issue.parentId ?? "")}
-              className="flex w-full items-center gap-2 rounded-[var(--radius-sm)] border border-[var(--border)] bg-[var(--surface-subtle)] px-2.5 py-2 text-left text-[12px] hover:border-[var(--border-strong)] cursor-pointer"
-            >
-              <Layers className="h-3.5 w-3.5 shrink-0 text-[var(--fg-3)]" />
-              <span className="shrink-0 font-mono-tabular text-[11px] text-[var(--fg-3)]">
-                {issue.parentShortId}
-              </span>
-              <span className="min-w-0 flex-1 truncate font-medium text-[var(--fg)]">
-                {issue.parentTitle}
-              </span>
-            </button>
-          )}
-
-          {/* Blockers */}
-          <section className="space-y-1.5">
-            <div className="text-[11.5px] font-semibold text-[var(--fg-3)]">
-              {t.drawer.blockers} ({blockers.length})
-            </div>
-            {blockers.length === 0 ? (
-              <div className="text-[12px] text-[var(--fg-3)]">{t.drawer.noBlockers}</div>
-            ) : (
-              <div className="space-y-1">
-                {blockers.map((b) => (
-                  <div
-                    key={b.id}
-                    className="flex items-center gap-2 rounded-[var(--radius-sm)] border border-[var(--border)] bg-[var(--surface-subtle)] px-2.5 py-1.5 text-[12px]"
-                  >
-                    <button
-                      type="button"
-                      onClick={() => openDrawer(b.id)}
-                      className="flex min-w-0 flex-1 items-center gap-2 text-left hover:text-[var(--accent)] cursor-pointer"
-                    >
-                      <StatusRing lane={b.lane} />
-                      <span className="shrink-0 font-mono-tabular text-[11px] text-[var(--fg-3)]">
-                        {b.shortId}
-                      </span>
-                      <span className="truncate font-medium text-[var(--fg)]">{b.title}</span>
-                    </button>
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      disabled={busy}
-                      onClick={() => void handleRemoveBlocker(b.id)}
-                    >
-                      {t.actions.remove}
-                    </Button>
-                  </div>
-                ))}
-              </div>
-            )}
-            <div className="flex items-center gap-1.5 pt-0.5">
-              <select
-                value={blockerPick}
-                onChange={(e) => setBlockerPick(e.target.value)}
-                className="h-7 min-w-0 flex-1 rounded-[var(--radius-xs)] border border-[var(--border)] bg-[var(--surface)] px-2 text-[12px] text-[var(--fg)]"
-              >
-                <option value="">{t.drawer.selectBlocker}</option>
-                {candidates.map((c) => (
-                  <option key={c.id} value={c.id}>
-                    [{t.lanes[c.lane]}] {c.shortId} · {c.title.slice(0, 36)}
-                  </option>
-                ))}
-              </select>
-              <Button
-                size="sm"
-                variant="outline"
-                disabled={!blockerPick || busy}
-                onClick={() => void handleAddBlocker()}
-                className="h-7"
-              >
-                + {t.actions.add}
-              </Button>
-            </div>
-          </section>
-
-          {/* Downstream unlocks */}
-          {unlocks.length > 0 && (
-            <section className="space-y-1.5">
-              <div className="text-[11.5px] font-semibold text-[var(--fg-3)]">
-                {t.drawer.unlocks} ({unlocks.length})
-              </div>
-              <div className="space-y-1">
-                {unlocks.map((u) => (
-                  <button
-                    key={u.id}
-                    type="button"
-                    onClick={() => openDrawer(u.id)}
-                    className="flex w-full items-center gap-2 rounded-[var(--radius-sm)] border border-[var(--border)] bg-[var(--surface-subtle)] px-2.5 py-1.5 text-left text-[12px] hover:border-[var(--border-strong)] cursor-pointer"
-                  >
-                    <StatusRing lane={u.lane} />
-                    <span className="shrink-0 font-mono-tabular text-[11px] text-[var(--fg-3)]">
-                      {u.shortId}
-                    </span>
-                    <span className="min-w-0 flex-1 truncate font-medium text-[var(--fg)]">
-                      {u.title}
-                    </span>
-                  </button>
-                ))}
-              </div>
-            </section>
-          )}
-
-          {/* Description / Acceptance / Notes */}
+          {/* Description / Acceptance / Notes / Proof — placed right up top for instant reading */}
           <section className="space-y-2">
             <div className="flex items-center justify-between">
               <span className="text-[11.5px] font-semibold text-[var(--fg-3)]">
@@ -899,6 +681,245 @@ export function IssueDrawer({ modulePrefix, moduleAliases, onRequestClose }: Iss
                 )}
               </div>
             )}
+          </section>
+
+          {/* Parent Epic fallback if parent record isn't loaded in byId */}
+          {!parentIssue && issue.parentId && issue.parentTitle && (
+            <button
+              type="button"
+              onClick={() => openDrawer(issue.parentId ?? "")}
+              className="flex w-full items-center gap-2 rounded-[var(--radius-sm)] border border-[var(--border)] bg-[var(--surface-subtle)] px-2.5 py-2 text-left text-[12px] hover:border-[var(--border-strong)] cursor-pointer"
+            >
+              <Layers className="h-3.5 w-3.5 shrink-0 text-[var(--fg-3)]" />
+              <span className="shrink-0 font-mono-tabular text-[11px] text-[var(--fg-3)]">
+                {issue.parentShortId}
+              </span>
+              <span className="min-w-0 flex-1 truncate font-medium text-[var(--fg)]">
+                {issue.parentTitle}
+              </span>
+            </button>
+          )}
+
+          {/* Blockers */}
+          <section className="space-y-1.5">
+            <div className="text-[11.5px] font-semibold text-[var(--fg-3)]">
+              {t.drawer.blockers} ({blockers.length})
+            </div>
+            {blockers.length === 0 ? (
+              <div className="text-[12px] text-[var(--fg-3)]">{t.drawer.noBlockers}</div>
+            ) : (
+              <div className="space-y-1">
+                {blockers.map((b) => (
+                  <div
+                    key={b.id}
+                    className="flex items-center gap-2 rounded-[var(--radius-sm)] border border-[var(--border)] bg-[var(--surface-subtle)] px-2.5 py-1.5 text-[12px]"
+                  >
+                    <button
+                      type="button"
+                      onClick={() => openDrawer(b.id)}
+                      className="flex min-w-0 flex-1 items-center gap-2 text-left hover:text-[var(--accent)] cursor-pointer"
+                    >
+                      <StatusRing lane={b.lane} />
+                      <span className="shrink-0 font-mono-tabular text-[11px] text-[var(--fg-3)]">
+                        {b.shortId}
+                      </span>
+                      <span className="truncate font-medium text-[var(--fg)]">{b.title}</span>
+                    </button>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      disabled={busy}
+                      onClick={() => void handleRemoveBlocker(b.id)}
+                    >
+                      {t.actions.remove}
+                    </Button>
+                  </div>
+                ))}
+              </div>
+            )}
+            <div className="flex items-center gap-1.5 pt-0.5">
+              <select
+                value={blockerPick}
+                onChange={(e) => setBlockerPick(e.target.value)}
+                className="h-7 min-w-0 flex-1 rounded-[var(--radius-xs)] border border-[var(--border)] bg-[var(--surface)] px-2 text-[12px] text-[var(--fg)]"
+              >
+                <option value="">{t.drawer.selectBlocker}</option>
+                {candidates.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    [{t.lanes[c.lane]}] {c.shortId} · {c.title.slice(0, 36)}
+                  </option>
+                ))}
+              </select>
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={!blockerPick || busy}
+                onClick={() => void handleAddBlocker()}
+                className="h-7"
+              >
+                + {t.actions.add}
+              </Button>
+            </div>
+          </section>
+
+          {/* Downstream unlocks */}
+          {unlocks.length > 0 && (
+            <section className="space-y-1.5">
+              <div className="text-[11.5px] font-semibold text-[var(--fg-3)]">
+                {t.drawer.unlocks} ({unlocks.length})
+              </div>
+              <div className="space-y-1">
+                {unlocks.map((u) => (
+                  <button
+                    key={u.id}
+                    type="button"
+                    onClick={() => openDrawer(u.id)}
+                    className="flex w-full items-center gap-2 rounded-[var(--radius-sm)] border border-[var(--border)] bg-[var(--surface-subtle)] px-2.5 py-1.5 text-left text-[12px] hover:border-[var(--border-strong)] cursor-pointer"
+                  >
+                    <StatusRing lane={u.lane} />
+                    <span className="shrink-0 font-mono-tabular text-[11px] text-[var(--fg-3)]">
+                      {u.shortId}
+                    </span>
+                    <span className="min-w-0 flex-1 truncate font-medium text-[var(--fg)]">
+                      {u.title}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            </section>
+          )}
+
+          {/* Compact Properties & Modules section */}
+          <section className="space-y-2">
+            <div className="text-[11.5px] font-semibold text-[var(--fg-3)]">
+              {t.drawer.propertiesHeading}
+            </div>
+            <div className="grid grid-cols-2 gap-2.5 rounded-[var(--radius-md)] border border-[var(--border)] bg-[var(--surface-subtle)] p-3">
+              <div className="flex flex-col gap-1">
+                <span className="text-[11px] font-medium text-[var(--fg-3)]">
+                  {t.drawer.assignee}
+                </span>
+                <input
+                  type="text"
+                  value={assigneeDraft}
+                  onChange={(e) => setAssigneeDraft(e.target.value)}
+                  onBlur={() => {
+                    if (assigneeDraft.trim() !== issue.assignee) {
+                      void patch(
+                        { issueId: issue.id, assignee: assigneeDraft.trim() },
+                        t.settings.savedHint,
+                      );
+                    }
+                  }}
+                  placeholder={t.drawer.assigneePlaceholder}
+                  className="h-7 rounded-[var(--radius-xs)] border border-[var(--border)] bg-[var(--surface)] px-2 font-mono-tabular text-[12px] text-[var(--fg)]"
+                />
+              </div>
+
+              <div className="flex flex-col gap-1">
+                <span className="text-[11px] font-medium text-[var(--fg-3)]">
+                  {t.drawer.otherLabels}
+                </span>
+                <input
+                  type="text"
+                  value={labelsDraft}
+                  onChange={(e) => setLabelsDraft(e.target.value)}
+                  onBlur={() => {
+                    const others = labelsDraft
+                      .split(",")
+                      .map((s) => s.trim())
+                      .filter(Boolean);
+                    const merged = [...new Set([...ownMods, ...others])];
+                    if (merged.join(",") !== issue.labels.join(",")) {
+                      void patch({ issueId: issue.id, labels: merged }, t.settings.savedHint);
+                    }
+                  }}
+                  placeholder={t.drawer.labelsPlaceholder}
+                  className="h-7 rounded-[var(--radius-xs)] border border-[var(--border)] bg-[var(--surface)] px-2 font-mono-tabular text-[12px] text-[var(--fg)]"
+                />
+              </div>
+
+              {snapshot.storageBackend === "native-jsonl" && (
+                <div className="col-span-2 flex flex-col gap-1">
+                  <span className="text-[11px] font-medium text-[var(--fg-3)]">
+                    {t.drawer.scope}
+                  </span>
+                  <input
+                    type="text"
+                    value={scopeDraft}
+                    onChange={(e) => setScopeDraft(e.target.value)}
+                    onBlur={() => {
+                      const nextScope = scopeDraft
+                        .split(",")
+                        .map((s) => s.trim())
+                        .filter(Boolean);
+                      if (nextScope.join(",") !== (issue.scope ?? []).join(",")) {
+                        void patch({ issueId: issue.id, scope: nextScope }, t.settings.savedHint);
+                      }
+                    }}
+                    placeholder={t.drawer.scopePlaceholder}
+                    className="h-7 rounded-[var(--radius-xs)] border border-[var(--border)] bg-[var(--surface)] px-2 font-mono-tabular text-[12px] text-[var(--fg)]"
+                  />
+                </div>
+              )}
+
+              <div className="col-span-2 flex flex-col gap-1.5">
+                <span className="text-[11px] font-medium text-[var(--fg-3)]">
+                  {t.drawer.modules}
+                </span>
+                <div className="flex flex-wrap items-center gap-1.5">
+                  {modChoices.map((k) => {
+                    const m = resolveModule(k, prefix, locale, moduleAliases);
+                    const active = ownMods.has(k);
+                    return (
+                      <button
+                        key={k}
+                        type="button"
+                        disabled={busy}
+                        onClick={() => void handleToggleMod(k)}
+                        className={`inline-flex h-6 items-center gap-1.5 rounded-[var(--radius-xs)] border px-2 text-[11.5px] transition-colors cursor-pointer ${
+                          active
+                            ? "border-[var(--accent-border)] bg-[var(--accent-soft)] font-medium text-[var(--accent)]"
+                            : "border-[var(--border)] bg-[var(--surface)] text-[var(--fg-2)] hover:border-[var(--border-strong)] hover:text-[var(--fg)]"
+                        }`}
+                      >
+                        <span
+                          className="h-1.5 w-1.5 rounded-full"
+                          style={{ backgroundColor: m.color }}
+                        />
+                        <span>{m.label}</span>
+                      </button>
+                    );
+                  })}
+                  {newModOpen ? (
+                    <div className="inline-flex items-center gap-1">
+                      <input
+                        type="text"
+                        value={newModDraft}
+                        onChange={(e) => setNewModDraft(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") void handleAddCustomMod();
+                          if (e.key === "Escape") setNewModOpen(false);
+                        }}
+                        placeholder={t.drawer.newModulePrompt}
+                        className="h-6 w-28 rounded-[var(--radius-xs)] border border-[var(--border-strong)] bg-[var(--surface)] px-1.5 font-mono-tabular text-[11px]"
+                      />
+                      <Button size="sm" variant="primary" onClick={() => void handleAddCustomMod()}>
+                        {t.actions.add}
+                      </Button>
+                    </div>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => setNewModOpen(true)}
+                      className="inline-flex h-6 items-center rounded-[var(--radius-xs)] border border-dashed border-[var(--border-strong)] px-2 text-[11.5px] text-[var(--fg-3)] hover:text-[var(--fg)] cursor-pointer"
+                    >
+                      {t.drawer.addModule}
+                    </button>
+                  )}
+                </div>
+              </div>
+            </div>
           </section>
 
           {/* Comments */}

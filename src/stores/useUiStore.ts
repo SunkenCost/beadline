@@ -24,6 +24,7 @@ interface UiState {
   boardScope: BoardScope;
   boardGroupMode: BoardGroupMode;
   hideClosedRounds: boolean;
+  closedLaneCollapsed: boolean;
   dagMode: DagMode;
   search: string;
   listLaneFilter: BoardLane | "";
@@ -41,6 +42,8 @@ interface UiState {
   setBoardScope: (scope: BoardScope) => void;
   setBoardGroupMode: (mode: BoardGroupMode) => void;
   setHideClosedRounds: (hide: boolean) => void;
+  setClosedLaneCollapsed: (collapsed: boolean) => void;
+  toggleClosedLane: () => void;
   setDagMode: (mode: DagMode) => void;
   setSearch: (q: string) => void;
   setListLaneFilter: (lane: BoardLane | "") => void;
@@ -61,7 +64,8 @@ export const useUiStore = create<UiState>((set) => ({
   activeModule: "",
   boardScope: "tasks",
   boardGroupMode: "flat",
-  hideClosedRounds: false,
+  hideClosedRounds: true,
+  closedLaneCollapsed: false,
   dagMode: "connected",
   search: "",
   listLaneFilter: "",
@@ -80,6 +84,8 @@ export const useUiStore = create<UiState>((set) => ({
   setBoardScope: (boardScope) => set({ boardScope }),
   setBoardGroupMode: (boardGroupMode) => set({ boardGroupMode }),
   setHideClosedRounds: (hideClosedRounds) => set({ hideClosedRounds }),
+  setClosedLaneCollapsed: (closedLaneCollapsed) => set({ closedLaneCollapsed }),
+  toggleClosedLane: () => set((s) => ({ closedLaneCollapsed: !s.closedLaneCollapsed })),
   setDagMode: (dagMode) => set({ dagMode }),
   setSearch: (search) => set({ search }),
   setListLaneFilter: (listLaneFilter) => set({ listLaneFilter }),

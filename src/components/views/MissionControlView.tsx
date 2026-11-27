@@ -53,6 +53,8 @@ export function MissionControlView() {
   const pushToast = useUiStore((s) => s.pushToast);
 
   const [showAllAttention, setShowAllAttention] = useState(false);
+  const [showAllConflicts, setShowAllConflicts] = useState(false);
+  const [showAllUnattributed, setShowAllUnattributed] = useState(false);
   const [expandedConflicts, setExpandedConflicts] = useState<Record<string, boolean>>({});
   const [busySession, setBusySession] = useState<string | null>(null);
 
@@ -109,6 +111,10 @@ export function MissionControlView() {
   const attentionVisible = showAllAttention ? attentionAll : attentionAll.slice(0, 3);
   const sessions = radar?.sessions ?? [];
   const conflicts = radar?.conflicts ?? [];
+  const conflictsVisible = showAllConflicts ? conflicts : conflicts.slice(0, 5);
+  const unattributedVisible = showAllUnattributed
+    ? unattributedDirtyWorktrees
+    : unattributedDirtyWorktrees.slice(0, 4);
   const blockers = radar?.topBlockers ?? [];
   const coverage = radar?.coverage;
   const coverageDegraded = Boolean(coverage && coverage.scanStatus !== "ok");
@@ -476,10 +482,21 @@ export function MissionControlView() {
                   <span className="text-[11.5px] font-semibold text-[var(--fg-2)]">
                     {t.mission.unattributedTitle} ({unattributedDirtyWorktrees.length})
                   </span>
+                  {unattributedDirtyWorktrees.length > 4 && (
+                    <button
+                      type="button"
+                      onClick={() => setShowAllUnattributed((v) => !v)}
+                      className="text-[11px] text-[var(--fg-2)] hover:text-[var(--fg)] cursor-pointer"
+                    >
+                      {showAllUnattributed
+                        ? t.mission.collapse
+                        : `${t.mission.showAll} (${unattributedDirtyWorktrees.length})`}
+                    </button>
+                  )}
                 </div>
                 <p className="mb-2 text-[11px] text-[var(--fg-3)]">{t.mission.unattributedDesc}</p>
                 <div className="space-y-2">
-                  {unattributedDirtyWorktrees.map((wt) => {
+                  {unattributedVisible.map((wt) => {
                     const totalDirty = wt.modifiedCount + wt.untrackedCount;
                     const totalCommitted = wt.committedCount ?? 0;
                     const previewPaths =
@@ -550,6 +567,17 @@ export function MissionControlView() {
                   {conflicts.length}
                 </span>
               </div>
+              {conflicts.length > 5 && (
+                <button
+                  type="button"
+                  onClick={() => setShowAllConflicts((v) => !v)}
+                  className="text-[11.5px] text-[var(--fg-2)] hover:text-[var(--fg)] cursor-pointer"
+                >
+                  {showAllConflicts
+                    ? t.mission.collapse
+                    : `${t.mission.showAll} (${conflicts.length})`}
+                </button>
+              )}
             </header>
 
             {conflicts.length === 0 ? (
@@ -558,7 +586,7 @@ export function MissionControlView() {
               </div>
             ) : (
               <div className="divide-y divide-[var(--border-subtle)]">
-                {conflicts.map((c) => {
+                {conflictsVisible.map((c) => {
                   const expanded = Boolean(expandedConflicts[c.id]);
                   const evidenceList =
                     c.evidence.paths.length > 0 ? c.evidence.paths : c.evidence.matchedScopes;

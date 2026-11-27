@@ -10,6 +10,7 @@ import {
   RefreshCw,
   Search,
   Settings,
+  SlidersHorizontal,
   X,
 } from "lucide-react";
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -19,6 +20,8 @@ import { CreateIssueModal } from "@/components/modals/CreateIssueModal";
 import { Titlebar } from "@/components/shell/Titlebar";
 import { WorkspaceSwitcher } from "@/components/shell/WorkspaceSwitcher";
 import { Button } from "@/components/ui/Button";
+import { Popover } from "@/components/ui/Popover";
+import { Switch } from "@/components/ui/Switch";
 import { ToastStack } from "@/components/ui/Toast";
 import { Tooltip, TooltipProvider } from "@/components/ui/Tooltip";
 import { AllActiveView } from "@/components/views/AllActiveView";
@@ -93,6 +96,7 @@ export function App() {
     boardScope,
     boardGroupMode,
     hideClosedRounds,
+    closedLaneCollapsed,
     search,
     setActiveView,
     setSettingsOpen,
@@ -102,6 +106,7 @@ export function App() {
     setBoardScope,
     setBoardGroupMode,
     setHideClosedRounds,
+    setClosedLaneCollapsed,
     setSearch,
     setListLaneFilter,
     pushToast,
@@ -338,7 +343,7 @@ export function App() {
           {/* Collapsible Minimal Sidebar */}
           <aside
             className={`flex shrink-0 flex-col border-r border-[var(--border)] bg-[var(--sidebar)] transition-[width] duration-150 ${
-              sidebarCollapsed ? "w-[52px]" : "w-[228px]"
+              sidebarCollapsed ? "w-[52px]" : "w-[208px]"
             }`}
           >
             <WorkspaceSwitcher collapsed={sidebarCollapsed} />
@@ -362,16 +367,20 @@ export function App() {
                   {!sidebarCollapsed && (
                     <>
                       <span className="min-w-0 flex-1 truncate text-left">{t.nav.allActive}</span>
-                      <span className="font-mono-tabular text-[11px] text-[var(--fg-3)]">
-                        {allActive.length}
-                      </span>
+                      {allActive.length > 0 && (
+                        <span className="font-mono-tabular text-[11px] text-[var(--fg-3)]">
+                          {allActive.length}
+                        </span>
+                      )}
                     </>
                   )}
                 </button>
 
-                {/* 4 Project Views */}
+                {/* Project Views */}
                 {NAV_ITEMS.map(({ id, icon: Icon, labelKey }) => {
                   const active = activeView === id;
+                  const count = navCounts[labelKey];
+                  const isUrgentMission = id === "mission" && (radar?.attention.length ?? 0) > 0;
                   return (
                     <button
                       key={id}
@@ -392,9 +401,17 @@ export function App() {
                           <span className="min-w-0 flex-1 truncate text-left">
                             {t.nav[labelKey]}
                           </span>
-                          <span className="font-mono-tabular text-[11px] text-[var(--fg-3)]">
-                            {navCounts[labelKey]}
-                          </span>
+                          {count > 0 && (
+                            <span
+                              className={`font-mono-tabular text-[11px] ${
+                                isUrgentMission
+                                  ? "rounded-full bg-[var(--accent-soft)] px-1.5 py-0.25 font-medium text-[var(--accent)]"
+                                  : "text-[var(--fg-3)]"
+                              }`}
+                            >
+                              {count}
+                            </span>
+                          )}
                         </>
                       )}
                     </button>
@@ -409,7 +426,7 @@ export function App() {
                     <span>{t.nav.modules}</span>
                     <span className="font-mono-tabular">{snapshot?.modules.length ?? 0}</span>
                   </div>
-                  <div className="flex flex-col gap-0.5 px-2">
+                  <div className="flex flex-col gap-0.5 px-2 pb-2">
                     <button
                       type="button"
                       onClick={() => setActiveModule("")}
@@ -454,38 +471,36 @@ export function App() {
                     })}
                   </div>
 
-                  {/* Active Heartbeat */}
-                  <div className="flex items-center justify-between px-4 pt-4 pb-1 text-[11px] font-medium text-[var(--fg-3)]">
-                    <span>{t.nav.activeNow}</span>
-                    <span className="font-mono-tabular">{sidebarLiveTasks.length}</span>
-                  </div>
-                  <div className="flex flex-col gap-0.5 px-2 pb-3">
-                    {sidebarLiveTasks.length === 0 ? (
-                      <div className="px-2 py-1 text-[11.5px] text-[var(--fg-3)]">
-                        {t.status.noActiveTasks}
+                  {/* Active Heartbeat — only rendered when tasks are actually in progress */}
+                  {sidebarLiveTasks.length > 0 && (
+                    <>
+                      <div className="flex items-center justify-between px-4 pt-3 pb-1 text-[11px] font-medium text-[var(--fg-3)]">
+                        <span>{t.nav.activeNow}</span>
+                        <span className="font-mono-tabular">{sidebarLiveTasks.length}</span>
                       </div>
-                    ) : (
-                      sidebarLiveTasks.slice(0, 8).map((it) => (
-                        <button
-                          key={it.id}
-                          type="button"
-                          onClick={() => openDrawer(it.id)}
-                          className="flex w-full items-start gap-2 rounded-[var(--radius-sm)] px-2 py-1.5 text-left transition-colors hover:bg-[var(--surface-hover)] cursor-pointer"
-                        >
-                          <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-[var(--accent)]" />
-                          <div className="min-w-0 flex-1">
-                            <div className="line-clamp-2 text-[12px] leading-snug text-[var(--fg-2)]">
-                              {it.title}
+                      <div className="flex flex-col gap-0.5 px-2 pb-3">
+                        {sidebarLiveTasks.slice(0, 8).map((it) => (
+                          <button
+                            key={it.id}
+                            type="button"
+                            onClick={() => openDrawer(it.id)}
+                            className="flex w-full items-start gap-2 rounded-[var(--radius-sm)] px-2 py-1.5 text-left transition-colors hover:bg-[var(--surface-hover)] cursor-pointer"
+                          >
+                            <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-[var(--accent)]" />
+                            <div className="min-w-0 flex-1">
+                              <div className="line-clamp-2 text-[12px] leading-snug text-[var(--fg-2)]">
+                                {it.title}
+                              </div>
+                              <div className="mt-0.5 font-mono-tabular text-[10px] text-[var(--fg-3)]">
+                                {it.shortId}
+                                {it.assignee ? ` · ${it.assignee}` : ""}
+                              </div>
                             </div>
-                            <div className="mt-0.5 font-mono-tabular text-[10px] text-[var(--fg-3)]">
-                              {it.shortId}
-                              {it.assignee ? ` · ${it.assignee}` : ""}
-                            </div>
-                          </div>
-                        </button>
-                      ))
-                    )}
-                  </div>
+                          </button>
+                        ))}
+                      </div>
+                    </>
+                  )}
                 </>
               )}
             </div>
@@ -611,70 +626,102 @@ export function App() {
                   </div>
 
                   {activeView === "board" && (
-                    <>
-                      <div className="inline-flex h-7 shrink-0 items-center rounded-[var(--radius-sm)] border border-[var(--border)] bg-[var(--surface-subtle)] p-0.5">
-                        <button
-                          type="button"
-                          onClick={() => setBoardGroupMode("flat")}
-                          className={`h-[22px] shrink-0 whitespace-nowrap rounded-[var(--radius-xs)] px-2 text-[11.5px] cursor-pointer ${
-                            boardGroupMode === "flat"
-                              ? "bg-[var(--surface)] font-medium text-[var(--fg)] shadow-[var(--shadow-xs)]"
-                              : "text-[var(--fg-2)] hover:text-[var(--fg)]"
-                          }`}
-                        >
-                          {t.board.flatMode}
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setBoardGroupMode("epic")}
-                          className={`h-[22px] shrink-0 whitespace-nowrap rounded-[var(--radius-xs)] px-2 text-[11.5px] cursor-pointer ${
-                            boardGroupMode === "epic"
-                              ? "bg-[var(--surface)] font-medium text-[var(--fg)] shadow-[var(--shadow-xs)]"
-                              : "text-[var(--fg-2)] hover:text-[var(--fg)]"
-                          }`}
-                        >
-                          {t.board.groupByEpic}
-                        </button>
-                      </div>
-
-                      {boardGroupMode === "flat" && (
-                        <div className="inline-flex h-7 shrink-0 items-center rounded-[var(--radius-sm)] border border-[var(--border)] bg-[var(--surface-subtle)] p-0.5">
-                          <button
-                            type="button"
-                            onClick={() => setBoardScope("tasks")}
-                            className={`h-[22px] shrink-0 whitespace-nowrap rounded-[var(--radius-xs)] px-2 text-[11.5px] cursor-pointer ${
-                              boardScope === "tasks"
-                                ? "bg-[var(--surface)] font-medium text-[var(--fg)] shadow-[var(--shadow-xs)]"
-                                : "text-[var(--fg-2)] hover:text-[var(--fg)]"
-                            }`}
-                          >
-                            {t.board.tasksOnly}
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => setBoardScope("all")}
-                            className={`h-[22px] shrink-0 whitespace-nowrap rounded-[var(--radius-xs)] px-2 text-[11.5px] cursor-pointer ${
-                              boardScope === "all"
-                                ? "bg-[var(--surface)] font-medium text-[var(--fg)] shadow-[var(--shadow-xs)]"
-                                : "text-[var(--fg-2)] hover:text-[var(--fg)]"
-                            }`}
-                          >
-                            {t.board.withEpics}
-                          </button>
-                        </div>
-                      )}
-
-                      {hasClosedRounds && (
-                        <Button
-                          size="md"
-                          variant={hideClosedRounds ? "outline" : "ghost"}
-                          onClick={() => setHideClosedRounds(!hideClosedRounds)}
-                          className="text-[11.5px]"
-                        >
-                          {hideClosedRounds ? t.board.showRounds : t.board.hideRounds}
+                    <Popover
+                      align="end"
+                      className="w-[248px] p-3"
+                      trigger={
+                        <Button size="md" variant="outline" className="text-[11.5px]">
+                          <SlidersHorizontal className="h-3.5 w-3.5" />
+                          <span>{t.board.displayBtn}</span>
                         </Button>
-                      )}
-                    </>
+                      }
+                    >
+                      <div className="flex flex-col gap-3">
+                        <div className="space-y-1.5">
+                          <div className="text-[11px] font-medium text-[var(--fg-3)]">
+                            {t.board.displayLayout}
+                          </div>
+                          <div className="grid grid-cols-2 gap-1 rounded-[var(--radius-sm)] border border-[var(--border)] bg-[var(--surface-subtle)] p-0.5">
+                            <button
+                              type="button"
+                              onClick={() => setBoardGroupMode("flat")}
+                              className={`h-6 whitespace-nowrap rounded-[var(--radius-xs)] text-[11.5px] cursor-pointer ${
+                                boardGroupMode === "flat"
+                                  ? "bg-[var(--surface)] font-medium text-[var(--fg)] shadow-[var(--shadow-xs)]"
+                                  : "text-[var(--fg-2)] hover:text-[var(--fg)]"
+                              }`}
+                            >
+                              {t.board.flatMode}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setBoardGroupMode("epic")}
+                              className={`h-6 whitespace-nowrap rounded-[var(--radius-xs)] text-[11.5px] cursor-pointer ${
+                                boardGroupMode === "epic"
+                                  ? "bg-[var(--surface)] font-medium text-[var(--fg)] shadow-[var(--shadow-xs)]"
+                                  : "text-[var(--fg-2)] hover:text-[var(--fg)]"
+                              }`}
+                            >
+                              {t.board.groupByEpic}
+                            </button>
+                          </div>
+                        </div>
+
+                        {boardGroupMode === "flat" && (
+                          <div className="space-y-1.5">
+                            <div className="text-[11px] font-medium text-[var(--fg-3)]">
+                              {t.board.displayScope}
+                            </div>
+                            <div className="grid grid-cols-2 gap-1 rounded-[var(--radius-sm)] border border-[var(--border)] bg-[var(--surface-subtle)] p-0.5">
+                              <button
+                                type="button"
+                                onClick={() => setBoardScope("tasks")}
+                                className={`h-6 whitespace-nowrap rounded-[var(--radius-xs)] text-[11.5px] cursor-pointer ${
+                                  boardScope === "tasks"
+                                    ? "bg-[var(--surface)] font-medium text-[var(--fg)] shadow-[var(--shadow-xs)]"
+                                    : "text-[var(--fg-2)] hover:text-[var(--fg)]"
+                                }`}
+                              >
+                                {t.board.tasksOnly}
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setBoardScope("all")}
+                                className={`h-6 whitespace-nowrap rounded-[var(--radius-xs)] text-[11.5px] cursor-pointer ${
+                                  boardScope === "all"
+                                    ? "bg-[var(--surface)] font-medium text-[var(--fg)] shadow-[var(--shadow-xs)]"
+                                    : "text-[var(--fg-2)] hover:text-[var(--fg)]"
+                                }`}
+                              >
+                                {t.board.withEpics}
+                              </button>
+                            </div>
+                          </div>
+                        )}
+
+                        {boardGroupMode === "flat" && (
+                          <div className="flex items-center justify-between gap-2 border-t border-[var(--border-subtle)] pt-2.5 text-[12px] text-[var(--fg-2)]">
+                            <span>{t.board.showClosedLane}</span>
+                            <Switch
+                              checked={!closedLaneCollapsed}
+                              onCheckedChange={(show) => setClosedLaneCollapsed(!show)}
+                              ariaLabel={t.board.showClosedLane}
+                            />
+                          </div>
+                        )}
+
+                        {hasClosedRounds && (
+                          <div className="flex items-center justify-between gap-2 border-t border-[var(--border-subtle)] pt-2.5 text-[12px] text-[var(--fg-2)]">
+                            <span>{t.board.hideRounds}</span>
+                            <Switch
+                              checked={hideClosedRounds}
+                              onCheckedChange={(checked) => setHideClosedRounds(checked)}
+                              ariaLabel={t.board.hideRounds}
+                            />
+                          </div>
+                        )}
+                      </div>
+                    </Popover>
                   )}
 
                   {snapshot?.storageBackend === "dolt-cli" && (

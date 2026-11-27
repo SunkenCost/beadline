@@ -580,7 +580,7 @@ pub fn compute_radar_snapshot_with_cache(
     let top_blockers = compute_blocker_hotspots(issues);
 
     // Step 5: Honest Attention queue (WaitingHuman NEVER dropped on reachability timeout!)
-    let attention = compute_attention_items(&sessions, &conflicts, &issue_by_id, now_ms);
+    let attention = compute_attention_items(&sessions, &conflicts, &observed, &issue_by_id, now_ms);
 
     // Step 6: Coverage honesty
     let total_worktrees = observed.len();
@@ -1112,6 +1112,8 @@ pub fn detect_conflicts(
             .then_with(|| b.evidence.total_paths.cmp(&a.evidence.total_paths))
             .then_with(|| a.id.cmp(&b.id))
     });
+    // Keep radar scannable even on repos with many historical worktrees
+    alerts.truncate(30);
     alerts
 }
 
@@ -1269,11 +1271,17 @@ pub fn compute_blocker_hotspots(issues: &[IssueDto]) -> Vec<BlockerHotspot> {
 fn compute_attention_items(
     sessions: &[SessionLease],
     conflicts: &[ConflictAlert],
+    observed: &[ObservedWorktree],
     issue_by_id: &HashMap<&str, &IssueDto>,
     now_ms: u64,
 ) -> Vec<AttentionItem> {
     let mut items = Vec::new();
     let mut sessions_with_pending = HashSet::new();
+    let active_or_dirty_wts: HashSet<&str> = observed
+        .iter()
+        .filter(|o| !o.full_dirty_paths.is_empty() || !o.activity.session_ids.is_empty())
+        .map(|o| o.activity.worktree_id.as_str())
+        .collect();
 
     // 1. Persistent PendingHumanRequest / WaitingHuman — NEVER hidden or downgraded when reachability expires!
     for s in sessions {
@@ -1315,12 +1323,25 @@ fn compute_attention_items(
         });
     }
 
-    // 2. Non-lockfile SameFileDirty AND SameFileCommitted overlaps + SharedWorktree
+    // 2. Non-lockfile SameFileDirty + active/dirty SameFileCommitted + SharedWorktree
+    // (Purely historical clean committed-vs-committed pairs between idle unattributed worktrees
+    // stay visible in the Conflicts panel without flooding the urgent Needs Attention queue.)
     for c in conflicts {
         match c.kind {
             ConflictKind::SameFileDirty | ConflictKind::SameFileCommitted => {
                 if c.evidence.lockfile_only {
                     continue;
+                }
+                if c.kind == ConflictKind::SameFileCommitted {
+                    let touches_live_work = c.participants.iter().any(|p| {
+                        p.kind == ParticipantKind::Session
+                            || p.worktree_id
+                                .as_deref()
+                                .is_some_and(|wid| active_or_dirty_wts.contains(wid))
+                    });
+                    if !touches_live_work {
+                        continue;
+                    }
                 }
                 let first_path = c
                     .evidence
@@ -1662,7 +1683,8 @@ mod tests {
         let conflicts = detect_conflicts(&[], &[s1.clone(), s2.clone(), s3.clone()], &[], None, 1000);
         assert!(conflicts.iter().any(|c| c.kind == ConflictKind::SharedWorktree));
 
-        let attention = compute_attention_items(&[s1, s2, s3], &conflicts, &HashMap::new(), 1_800_000_000_000);
+        let attention =
+            compute_attention_items(&[s1, s2, s3], &conflicts, &[], &HashMap::new(), 1_800_000_000_000);
         let wait = attention
             .iter()
             .find(|a| a.kind == AttentionKind::WaitingHuman)

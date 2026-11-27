@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
+import { ChevronDown, ChevronRight } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/Button";
 import { Dialog } from "@/components/ui/Dialog";
 import { useT } from "@/i18n";
@@ -52,12 +53,15 @@ export function CreateIssueModal({
   const [description, setDescription] = useState("");
   const [acceptance, setAcceptance] = useState("");
   const [notes, setNotes] = useState("");
+  const [showAdvanced, setShowAdvanced] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const titleInputRef = useRef<HTMLInputElement>(null);
 
   const prefix = modulePrefix || "mod:";
 
   useEffect(() => {
     if (!createModalOpen) return;
+    requestAnimationFrame(() => titleInputRef.current?.focus());
     setTitle("");
     setIssueType("task");
     setPriority(1);
@@ -68,6 +72,7 @@ export function CreateIssueModal({
     setDescription("");
     setAcceptance("");
     setNotes("");
+    setShowAdvanced(false);
 
     const pid = createParentId ?? "";
     setParentId(pid);
@@ -105,7 +110,7 @@ export function CreateIssueModal({
 
   const handleSubmit = async () => {
     const cleanTitle = title.trim();
-    if (!cleanTitle) return;
+    if (!cleanTitle || submitting) return;
     setSubmitting(true);
     try {
       const others = extraLabels
@@ -146,28 +151,46 @@ export function CreateIssueModal({
         if (!o) closeCreateModal();
       }}
       title={t.create.title}
-      maxWidthClass="max-w-[580px]"
+      maxWidthClass="max-w-[540px]"
       footer={
-        <>
-          <Button variant="outline" onClick={closeCreateModal}>
-            {t.actions.cancel}
-          </Button>
-          <Button
-            variant="primary"
-            disabled={!title.trim() || submitting}
-            onClick={() => void handleSubmit()}
-          >
-            {t.create.submit}
-          </Button>
-        </>
+        <div className="flex w-full items-center justify-between gap-2">
+          <span className="font-mono-tabular text-[11px] text-[var(--fg-3)]">
+            {t.create.submitHint}
+          </span>
+          <div className="flex items-center gap-2">
+            <Button variant="outline" onClick={closeCreateModal}>
+              {t.actions.cancel}
+            </Button>
+            <Button
+              variant="primary"
+              disabled={!title.trim() || submitting}
+              onClick={() => void handleSubmit()}
+            >
+              {t.create.submit}
+            </Button>
+          </div>
+        </div>
       }
     >
-      <div className="space-y-3">
+      <form
+        className="space-y-3"
+        onSubmit={(e) => {
+          e.preventDefault();
+          void handleSubmit();
+        }}
+        onKeyDown={(e) => {
+          if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
+            e.preventDefault();
+            void handleSubmit();
+          }
+        }}
+      >
         <div className="space-y-1">
           <label htmlFor="create-title" className="text-[11.5px] font-medium text-[var(--fg-2)]">
             {t.create.fldTitle}
           </label>
           <input
+            ref={titleInputRef}
             id="create-title"
             type="text"
             value={title}
@@ -177,7 +200,7 @@ export function CreateIssueModal({
           />
         </div>
 
-        <div className="grid grid-cols-2 gap-2.5">
+        <div className="grid grid-cols-3 gap-2">
           <div className="space-y-1">
             <label htmlFor="create-type" className="text-[11.5px] font-medium text-[var(--fg-2)]">
               {t.create.fldType}
@@ -211,9 +234,6 @@ export function CreateIssueModal({
               <option value={3}>P3</option>
             </select>
           </div>
-        </div>
-
-        <div className="grid grid-cols-2 gap-2.5">
           <div className="space-y-1">
             <label htmlFor="create-status" className="text-[11.5px] font-medium text-[var(--fg-2)]">
               {t.create.fldStatus}
@@ -229,64 +249,38 @@ export function CreateIssueModal({
               <option value="blocked">{t.statuses.blocked}</option>
             </select>
           </div>
-          <div className="space-y-1">
-            <label
-              htmlFor="create-assignee"
-              className="text-[11.5px] font-medium text-[var(--fg-2)]"
-            >
-              {t.create.fldAssignee}
-            </label>
-            <input
-              id="create-assignee"
-              type="text"
-              value={assignee}
-              onChange={(e) => setAssignee(e.target.value)}
-              placeholder={t.drawer.assigneePlaceholder}
-              className={fieldCls}
-            />
-          </div>
         </div>
 
-        <div className="grid grid-cols-2 gap-2.5">
-          <div className="space-y-1">
-            <label htmlFor="create-parent" className="text-[11.5px] font-medium text-[var(--fg-2)]">
-              {t.create.fldParent}
-            </label>
-            <select
-              id="create-parent"
-              value={parentId}
-              onChange={(e) => handleParentChange(e.target.value)}
-              className={fieldCls}
-            >
-              <option value="">{t.create.noParent}</option>
-              {(snapshot?.epics ?? []).map((ep) => (
-                <option key={ep.id} value={ep.id}>
-                  {ep.shortId} · {ep.title.slice(0, 32)}
-                </option>
-              ))}
-            </select>
-          </div>
-          <div className="space-y-1">
-            <label
-              htmlFor="create-blocker"
-              className="text-[11.5px] font-medium text-[var(--fg-2)]"
-            >
-              {t.create.fldBlocker}
-            </label>
-            <select
-              id="create-blocker"
-              value={blockerId}
-              onChange={(e) => setBlockerId(e.target.value)}
-              className={fieldCls}
-            >
-              <option value="">{t.create.noBlocker}</option>
-              {openIssues.map((x) => (
-                <option key={x.id} value={x.id}>
-                  [{t.lanes[x.lane]}] {x.shortId} · {x.title.slice(0, 32)}
-                </option>
-              ))}
-            </select>
-          </div>
+        <div className="space-y-1">
+          <label htmlFor="create-desc" className="text-[11.5px] font-medium text-[var(--fg-2)]">
+            {t.create.fldDesc}
+          </label>
+          <textarea
+            id="create-desc"
+            rows={3}
+            value={description}
+            onChange={(e) => setDescription(e.target.value)}
+            className={fieldCls}
+          />
+        </div>
+
+        <div className="space-y-1">
+          <label htmlFor="create-parent" className="text-[11.5px] font-medium text-[var(--fg-2)]">
+            {t.create.fldParent}
+          </label>
+          <select
+            id="create-parent"
+            value={parentId}
+            onChange={(e) => handleParentChange(e.target.value)}
+            className={fieldCls}
+          >
+            <option value="">{t.create.noParent}</option>
+            {(snapshot?.epics ?? []).map((ep) => (
+              <option key={ep.id} value={ep.id}>
+                {ep.shortId} · {ep.title.slice(0, 40)}
+              </option>
+            ))}
+          </select>
         </div>
 
         <div className="space-y-1.5">
@@ -316,60 +310,116 @@ export function CreateIssueModal({
           </div>
         </div>
 
-        <div className="space-y-1">
-          <label htmlFor="create-labels" className="text-[11.5px] font-medium text-[var(--fg-2)]">
-            {t.create.fldLabels}
-          </label>
-          <input
-            id="create-labels"
-            type="text"
-            value={extraLabels}
-            onChange={(e) => setExtraLabels(e.target.value)}
-            placeholder={t.create.labelsPlaceholder}
-            className={fieldCls}
-          />
-        </div>
+        {/* Collapsible secondary fields */}
+        <div className="border-t border-[var(--border-subtle)] pt-2">
+          <button
+            type="button"
+            onClick={() => setShowAdvanced((v) => !v)}
+            className="inline-flex items-center gap-1 text-[11.5px] text-[var(--fg-3)] hover:text-[var(--fg)] cursor-pointer"
+          >
+            {showAdvanced ? (
+              <ChevronDown className="h-3.5 w-3.5" />
+            ) : (
+              <ChevronRight className="h-3.5 w-3.5" />
+            )}
+            <span>{t.create.moreOptions}</span>
+          </button>
 
-        <div className="space-y-1">
-          <label htmlFor="create-desc" className="text-[11.5px] font-medium text-[var(--fg-2)]">
-            {t.create.fldDesc}
-          </label>
-          <textarea
-            id="create-desc"
-            rows={3}
-            value={description}
-            onChange={(e) => setDescription(e.target.value)}
-            className={fieldCls}
-          />
-        </div>
+          {showAdvanced && (
+            <div className="mt-2.5 space-y-2.5">
+              <div className="grid grid-cols-2 gap-2.5">
+                <div className="space-y-1">
+                  <label
+                    htmlFor="create-assignee"
+                    className="text-[11.5px] font-medium text-[var(--fg-2)]"
+                  >
+                    {t.create.fldAssignee}
+                  </label>
+                  <input
+                    id="create-assignee"
+                    type="text"
+                    value={assignee}
+                    onChange={(e) => setAssignee(e.target.value)}
+                    placeholder={t.drawer.assigneePlaceholder}
+                    className={fieldCls}
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label
+                    htmlFor="create-blocker"
+                    className="text-[11.5px] font-medium text-[var(--fg-2)]"
+                  >
+                    {t.create.fldBlocker}
+                  </label>
+                  <select
+                    id="create-blocker"
+                    value={blockerId}
+                    onChange={(e) => setBlockerId(e.target.value)}
+                    className={fieldCls}
+                  >
+                    <option value="">{t.create.noBlocker}</option>
+                    {openIssues.map((x) => (
+                      <option key={x.id} value={x.id}>
+                        [{t.lanes[x.lane]}] {x.shortId} · {x.title.slice(0, 32)}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
 
-        <div className="grid grid-cols-2 gap-2.5">
-          <div className="space-y-1">
-            <label htmlFor="create-acc" className="text-[11.5px] font-medium text-[var(--fg-2)]">
-              {t.create.fldAcc}
-            </label>
-            <textarea
-              id="create-acc"
-              rows={2}
-              value={acceptance}
-              onChange={(e) => setAcceptance(e.target.value)}
-              className={fieldCls}
-            />
-          </div>
-          <div className="space-y-1">
-            <label htmlFor="create-notes" className="text-[11.5px] font-medium text-[var(--fg-2)]">
-              {t.create.fldNotes}
-            </label>
-            <textarea
-              id="create-notes"
-              rows={2}
-              value={notes}
-              onChange={(e) => setNotes(e.target.value)}
-              className={fieldCls}
-            />
-          </div>
+              <div className="space-y-1">
+                <label
+                  htmlFor="create-labels"
+                  className="text-[11.5px] font-medium text-[var(--fg-2)]"
+                >
+                  {t.create.fldLabels}
+                </label>
+                <input
+                  id="create-labels"
+                  type="text"
+                  value={extraLabels}
+                  onChange={(e) => setExtraLabels(e.target.value)}
+                  placeholder={t.create.labelsPlaceholder}
+                  className={fieldCls}
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-2.5">
+                <div className="space-y-1">
+                  <label
+                    htmlFor="create-acc"
+                    className="text-[11.5px] font-medium text-[var(--fg-2)]"
+                  >
+                    {t.create.fldAcc}
+                  </label>
+                  <textarea
+                    id="create-acc"
+                    rows={2}
+                    value={acceptance}
+                    onChange={(e) => setAcceptance(e.target.value)}
+                    className={fieldCls}
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label
+                    htmlFor="create-notes"
+                    className="text-[11.5px] font-medium text-[var(--fg-2)]"
+                  >
+                    {t.create.fldNotes}
+                  </label>
+                  <textarea
+                    id="create-notes"
+                    rows={2}
+                    value={notes}
+                    onChange={(e) => setNotes(e.target.value)}
+                    className={fieldCls}
+                  />
+                </div>
+              </div>
+            </div>
+          )}
         </div>
-      </div>
+      </form>
     </Dialog>
   );
 }
